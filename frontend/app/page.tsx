@@ -47,6 +47,7 @@ export default function Home() {
       (err) => {
         setError(err)
         setLoading(false)
+        setStatuses({})
       }
     )
   }

@@ -3,6 +3,8 @@ import { Section, Narrative } from "@/types/blog"
 import { RefreshCw, ChevronDown, ChevronUp, ImageIcon } from "lucide-react"
 import { useState } from "react"
 
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+
 interface Props {
   section: Section
   index: number
@@ -20,7 +22,7 @@ export default function SectionCard({ section, index, topic, audience, narrative
   async function handleRegenerate() {
     setRegenerating(true)
     try {
-      const res = await fetch("http://localhost:8000/regenerate-section", {
+      const res = await fetch(`${API}/regenerate-section`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ topic, audience, sectionTitle: section.sectionTitle, narrative }),

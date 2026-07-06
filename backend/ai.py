@@ -32,20 +32,40 @@ BLOG_TARGET_LENGTH = 1500
 MAX_RETRIES = 2
 MCQ_COUNT = 5
 SECTION_QUEUE_DELAY = 4
+VALIDATOR_MODEL = "llama-3.1-8b-instant"
 
 
 # ── Cerebras fallback client ──────────────────────────────────────────────────
 
-cerebras_client = Cerebras(api_key=CEREBRAS_API_KEY)
+cerebras_client = None
+if CEREBRAS_API_KEY:
+    try:
+        cerebras_client = Cerebras(api_key=CEREBRAS_API_KEY)
+    except Exception:
+        cerebras_client = None
 
 
 def cerebras_invoke(prompt: str) -> str:
+    if not cerebras_client:
+        raise ValueError("Cerebras client not initialized due to missing API key")
     response = cerebras_client.chat.completions.create(
         model=CEREBRAS_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
     )
     return response.choices[0].message.content
+
+
+def invoke_agent_with_fallback(prompt: str, fallback_model: str) -> str:
+    if cerebras_client:
+        try:
+            return cerebras_invoke(prompt)
+        except Exception:
+            pass
+    # Fallback to Groq
+    llm = build_llm(fallback_model)
+    response = llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
+    return response.content
 
 
 # ── Shared State ────────────────────────────────────────────────────────────
@@ -60,6 +80,59 @@ def llm_invoke_with_retry(llm, messages, retries=3, wait=5):
                 time.sleep(wait)
             else:
                 raise
+
+
+# ── Topic Validator ──────────────────────────────────────────────────────────
+
+VALIDATOR_PROMPT = """You are a topic validator for a blog generation system.
+
+Evaluate if this topic is suitable for generating an informative, educational blog post.
+
+TOPIC: "{topic}"
+
+Reject if:
+- It is nonsensical, random characters, or gibberish (e.g. "asdfjkl", "123xyz")
+- It is too vague to write a meaningful blog (e.g. "things", "stuff", "idk")
+- It is inappropriate, hateful, violent, or politically biased
+- It is a single common word with no context (e.g. "cat", "yes", "hello")
+- It is a person's first name with no other context (e.g. "sarthak", "john", "rahul")
+- It cannot support a 1000+ word informative blog
+
+Accept if:
+- It is a real topic, concept, event, issue, or subject
+- A knowledgeable person could write multiple paragraphs about it
+- It is educational or informative in nature
+
+Return ONLY valid JSON:
+{{"valid": true, "reason": ""}}
+or
+{{"valid": false, "reason": "Brief explanation why this topic is not suitable"}}
+
+No extra text."""
+
+
+def validate_topic(topic: str) -> dict:
+    import json, re
+    topic_clean = topic.strip()
+    if not topic_clean or len(topic_clean) < 3:
+        return {"valid": False, "reason": "Topic is too short. Please enter a meaningful topic."}
+
+    # Local check: Reject single short words (e.g. cat, dog, yes)
+    if len(topic_clean.split()) == 1 and len(topic_clean) < 4:
+        return {"valid": False, "reason": "Single short words are not valid topics. Please expand your topic description."}
+
+    llm = build_llm(VALIDATOR_MODEL)
+    prompt = VALIDATOR_PROMPT.format(topic=topic.strip())
+    try:
+        response = llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
+        match = re.search(r"\{[\s\S]*\}", response.content)
+        parsed = json.loads(match.group()) if match else {}
+        return {
+            "valid": parsed.get("valid", True),
+            "reason": parsed.get("reason", "")
+        }
+    except Exception:
+        return {"valid": True, "reason": ""}
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -194,7 +267,6 @@ def run_narrative_agent(topic: str, audience: str, research_data: dict) -> dict:
         f"- {f['fact']} ({f['url']})" for f in research_data.get("findings", [])
     ])
     
-    llm = build_narrative_agent()
     prompt = NARRATIVE_PROMPT.format(
         topic=topic,
         audience=audience,
@@ -203,21 +275,46 @@ def run_narrative_agent(topic: str, audience: str, research_data: dict) -> dict:
         gs_context=gs_context
     )
     
-    response = llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
+    raw_response = invoke_agent_with_fallback(prompt, NARRATIVE_MODEL)
     
     try:
-        match = re.search(r"\{[\s\S]*\}", response.content)
+        match = re.search(r"\{[\s\S]*\}", raw_response)
         parsed = json.loads(match.group()) if match else {}
     except Exception:
         parsed = {}
     
+    outline = parsed.get("outline", [])
+    if not outline or len(outline) != 4:
+        outline = [
+            f"Introduction to {topic}",
+            f"Key Challenges and Issues of {topic}",
+            f"Current Measures and Solutions for {topic}",
+            f"Conclusion and Way Forward for {topic}"
+        ]
+
+    writing_instructions = parsed.get("writingInstructions", [])
+    if not writing_instructions:
+        writing_instructions = [
+            "Use clear headings and structured paragraphs.",
+            "Integrate facts and figures from research where relevant.",
+            "Write in an engaging, reader-friendly tone matching the target audience."
+        ]
+
+    subject = parsed.get("subject")
+    if not subject:
+        subject = "General Studies" if audience == "UPSC" else "General Interest"
+
+    gs_paper = parsed.get("gsPaper")
+    if audience == "UPSC" and not gs_paper:
+        gs_paper = "GS-III"
+
     return {
         "audience": parsed.get("audience", audience),
         "topic": parsed.get("topic", topic),
-        "subject": parsed.get("subject"),
-        "gsPaper": parsed.get("gsPaper"),
-        "writingInstructions": parsed.get("writingInstructions", []),
-        "outline": parsed.get("outline", [])
+        "subject": subject,
+        "gsPaper": gs_paper,
+        "writingInstructions": writing_instructions,
+        "outline": outline
     }
 
 
@@ -315,7 +412,6 @@ def run_writer(topic: str, section: str, audience: str, section_research: dict, 
     
     feedback_text = f"\nREVIEWER FEEDBACK:\n{feedback}\n\nRewrite addressing the above issues." if feedback else ""
     
-    llm = build_writer()
     prompt = WRITER_PROMPT.format(
         section=section,
         topic=topic,
@@ -327,11 +423,7 @@ def run_writer(topic: str, section: str, audience: str, section_research: dict, 
         feedback=feedback_text
     )
 
-    try:
-        raw = cerebras_invoke(prompt)
-    except Exception:
-        response = llm_invoke_with_retry(llm, [HumanMessage(content=prompt)], retries=4, wait=10)
-        raw = response.content
+    raw = invoke_agent_with_fallback(prompt, WRITER_MODEL)
 
     try:
         match = re.search(r"\{[\s\S]*\}", raw)
@@ -407,10 +499,13 @@ def run_section_pipeline(topic: str, section: str, audience: str, narrative: dic
             break
     
     return {
-        "sectionTitle": written_section["sectionTitle"],
-        "content": written_section["content"],
-        "humanScore": review["humanScore"],
-        "image": written_section["image"]
+        "section": {
+            "sectionTitle": written_section["sectionTitle"],
+            "content": written_section["content"],
+            "humanScore": review["humanScore"],
+            "image": written_section["image"]
+        },
+        "facts": section_research.get("facts", [])
     }
 
 
@@ -418,19 +513,34 @@ def run_section_pipeline(topic: str, section: str, audience: str, narrative: dic
 
 def generate_references(main_research: dict, section_researches: list) -> dict:
     all_sources = []
+
+    def clean_url(url: str) -> str:
+        url = url.strip()
+        if not url:
+            return ""
+        # Check if it has spaces or doesn't have a dot (likely an organization name, not a URL)
+        if " " in url or "." not in url:
+            return ""
+        # Prepend https:// if no protocol scheme is specified
+        if not (url.startswith("http://") or url.startswith("https://")):
+            return "https://" + url
+        return url
     
     for finding in main_research.get("findings", []):
-        all_sources.append({
-            "url": finding.get("url", ""),
-            "title": finding.get("title", "")
-        })
+        url = clean_url(finding.get("url", ""))
+        if url:
+            all_sources.append({
+                "url": url,
+                "title": finding.get("title", "")
+            })
     
     for section_research in section_researches:
         for fact in section_research.get("facts", []):
             source = fact.get("source", "")
-            if source:
+            url = clean_url(source)
+            if url:
                 all_sources.append({
-                    "url": source,
+                    "url": url,
                     "title": ""
                 })
     
@@ -499,7 +609,6 @@ def run_metadata_generator(topic: str, audience: str, narrative: dict, sections:
 
     total_words = sum(len(s["content"].split()) for s in sections)
 
-    llm = build_llm(METADATA_MODEL)
     prompt = METADATA_PROMPT.format(
         topic=topic,
         audience=audience,
@@ -509,10 +618,10 @@ def run_metadata_generator(topic: str, audience: str, narrative: dict, sections:
         word_count=total_words
     )
 
-    response = llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
+    raw_response = invoke_agent_with_fallback(prompt, METADATA_MODEL)
 
     try:
-        match = re.search(r"\{[\s\S]*\}", response.content)
+        match = re.search(r"\{[\s\S]*\}", raw_response)
         parsed = json.loads(match.group()) if match else {}
     except Exception:
         parsed = {}
@@ -579,7 +688,6 @@ def run_mcq_generator(topic: str, audience: str, sections: list) -> dict:
         for s in sections
     ])
 
-    llm = build_llm(MCQ_MODEL)
     prompt = MCQ_PROMPT.format(
         num_questions=MCQ_COUNT,
         topic=topic,
@@ -587,10 +695,10 @@ def run_mcq_generator(topic: str, audience: str, sections: list) -> dict:
         sections_summary=sections_summary
     )
 
-    response = llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
+    raw_response = invoke_agent_with_fallback(prompt, MCQ_MODEL)
 
     try:
-        match = re.search(r"\{[\s\S]*\}", response.content)
+        match = re.search(r"\{[\s\S]*\}", raw_response)
         parsed = json.loads(match.group()) if match else {}
     except Exception:
         parsed = {}
@@ -602,6 +710,11 @@ def run_mcq_generator(topic: str, audience: str, sections: list) -> dict:
 # ── Full Blog Assembler ──────────────────────────────────────────────────────
 
 def generate_blog(topic: str, audience: str) -> dict:
+    print(f"[0/6] Validating topic: {topic}")
+    validation = validate_topic(topic)
+    if not validation["valid"]:
+        return {"error": validation["reason"]}
+
     print(f"[1/6] Researching topic: {topic}")
     main_research = run_researcher(topic)
 
@@ -616,8 +729,8 @@ def generate_blog(topic: str, audience: str) -> dict:
         if i > 0:
             time.sleep(SECTION_QUEUE_DELAY)
         result = run_section_pipeline(topic, section, audience, narrative)
-        sections.append(result)
-        section_researches.append({"facts": []})
+        sections.append(result["section"])
+        section_researches.append({"facts": result["facts"]})
 
     print("[4/6] Generating references...")
     references = generate_references(main_research, section_researches)

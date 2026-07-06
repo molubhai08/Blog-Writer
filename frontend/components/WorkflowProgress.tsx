@@ -3,6 +3,7 @@ import { StatusEvent } from "@/types/blog"
 import { CheckCircle, Circle, Loader } from "lucide-react"
 
 const STEPS = [
+  { key: "validator", label: "Validating Topic" },
   { key: "researcher", label: "Researching Topic" },
   { key: "narrative", label: "Building Outline" },
   { key: "section_0", label: "Writing Section 1" },
@@ -62,7 +63,7 @@ export default function WorkflowProgress({ statuses, outline }: Props) {
               {isDone && status?.data && (
                 <div className="ml-7 mt-1 text-xs text-gray-500 space-y-0.5">
                   {Object.entries(status.data).map(([k, v]) => (
-                    <div key={k}>
+                    <div key={k} className="break-all">
                       <span className="text-gray-600">{k}: </span>
                       <span>{Array.isArray(v) ? v.join(", ") : String(v)}</span>
                     </div>

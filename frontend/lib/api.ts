@@ -1,4 +1,4 @@
-const API = "http://localhost:8000"
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
 export function generateBlog(
   topic: string,
@@ -38,6 +38,7 @@ export function generateBlog(
         if (event === "status") onStatus(data)
         else if (event === "section") onSection(data.index, data.section)
         else if (event === "complete") onComplete(data)
+        else if (event === "error") onError(data.message)
       }
     }
   }).catch((e) => onError(e.message))

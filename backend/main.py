@@ -11,13 +11,14 @@ from ai import (
     generate_references,
     run_metadata_generator,
     run_mcq_generator,
+    validate_topic,
 )
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -42,6 +43,13 @@ def sse(event: str, data: dict) -> str:
 async def stream_blog(topic: str, audience: str):
     loop = asyncio.get_event_loop()
 
+    yield sse("status", {"step": "validator", "message": "Validating topic...", "done": False})
+    validation = await loop.run_in_executor(None, validate_topic, topic)
+    if not validation["valid"]:
+        yield sse("error", {"message": validation["reason"]})
+        return
+    yield sse("status", {"step": "validator", "message": "Topic validated", "done": True})
+
     yield sse("status", {"step": "researcher", "message": "Researching topic...", "done": False})
     main_research = await loop.run_in_executor(None, run_researcher, topic)
     yield sse("status", {"step": "researcher", "message": "Research complete", "done": True, "data": {
@@ -63,11 +71,11 @@ async def stream_blog(topic: str, audience: str):
     for i, section in enumerate(narrative["outline"]):
         yield sse("status", {"step": f"section_{i}", "message": f"Writing: {section}", "done": False})
         result = await loop.run_in_executor(None, run_section_pipeline, topic, section, audience, narrative)
-        sections.append(result)
-        section_researches.append({"facts": []})
-        yield sse("section", {"index": i, "section": result})
+        sections.append(result["section"])
+        section_researches.append({"facts": result["facts"]})
+        yield sse("section", {"index": i, "section": result["section"]})
         yield sse("status", {"step": f"section_{i}", "message": f"Done: {section}", "done": True, "data": {
-            "humanScore": result["humanScore"]
+            "humanScore": result["section"]["humanScore"]
         }})
 
     yield sse("status", {"step": "references", "message": "Generating references...", "done": False})
@@ -111,4 +119,4 @@ async def regenerate_section(req: RegenerateRequest):
     result = await loop.run_in_executor(
         None, run_section_pipeline, req.topic, req.sectionTitle, req.audience, req.narrative
     )
-    return result
+    return result["section"]
