@@ -1,6 +1,5 @@
 "use client"
 import { useState } from "react"
-import { useRouter } from "next/navigation"
 import { generateBlog } from "@/lib/api"
 import { Blog, Section, StatusEvent, Audience } from "@/types/blog"
 import WorkflowProgress from "@/components/WorkflowProgress"
@@ -8,7 +7,6 @@ import BlogView from "@/components/BlogView"
 import { Sparkles, BookOpen } from "lucide-react"
 
 export default function Home() {
-  const router = useRouter()
   const [topic, setTopic] = useState("")
   const [audience, setAudience] = useState<Audience>("UPSC")
   const [loading, setLoading] = useState(false)
@@ -66,7 +64,7 @@ export default function Home() {
     if (!blog) return
     const slug = blog.metadata.slug
     localStorage.setItem(`blog_${slug}`, JSON.stringify(blog))
-    router.push(`/blog/${slug}`)
+    window.open(`/blog/${slug}`, "_blank")
   }
 
   const isGenerating = loading

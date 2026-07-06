@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
@@ -9,24 +10,56 @@ from langgraph.graph.message import add_messages
 from typing import Annotated
 from typing_extensions import TypedDict
 import requests
+from groq import RateLimitError
+from cerebras.cloud.sdk import Cerebras
 
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 SAPLING_API_KEY = os.getenv("SAPLING_API_KEY")
+CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
+
 RESEARCHER_MODEL = "llama-3.1-8b-instant"
 NARRATIVE_MODEL = "llama-3.3-70b-versatile"
 SECTION_RESEARCHER_MODEL = "llama-3.1-8b-instant"
 WRITER_MODEL = "llama-3.1-8b-instant"
 METADATA_MODEL = "llama-3.3-70b-versatile"
 MCQ_MODEL = "llama-3.3-70b-versatile"
+CEREBRAS_MODEL = "zai-glm-4.7"
+
 BLOG_TARGET_LENGTH = 1500
 MAX_RETRIES = 2
 MCQ_COUNT = 5
+SECTION_QUEUE_DELAY = 4
+
+
+# ── Cerebras fallback client ──────────────────────────────────────────────────
+
+cerebras_client = Cerebras(api_key=CEREBRAS_API_KEY)
+
+
+def cerebras_invoke(prompt: str) -> str:
+    response = cerebras_client.chat.completions.create(
+        model=CEREBRAS_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+    )
+    return response.choices[0].message.content
 
 
 # ── Shared State ────────────────────────────────────────────────────────────
+
+
+def llm_invoke_with_retry(llm, messages, retries=3, wait=5):
+    for attempt in range(retries):
+        try:
+            return llm.invoke(messages)
+        except RateLimitError:
+            if attempt < retries - 1:
+                time.sleep(wait)
+            else:
+                raise
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -47,7 +80,7 @@ def build_react_agent(llm, tools: list):
     tool_map = {t.name: t for t in tools}
 
     def call_llm(state: AgentState):
-        return {"messages": [llm.invoke(state["messages"])]}
+        return {"messages": [llm_invoke_with_retry(llm, state["messages"])]}
 
     def call_tools(state: AgentState):
         last = state["messages"][-1]
@@ -170,7 +203,7 @@ def run_narrative_agent(topic: str, audience: str, research_data: dict) -> dict:
         gs_context=gs_context
     )
     
-    response = llm.invoke([HumanMessage(content=prompt)])
+    response = llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
     
     try:
         match = re.search(r"\{[\s\S]*\}", response.content)
@@ -293,18 +326,39 @@ def run_writer(topic: str, section: str, audience: str, section_research: dict, 
         writing_guidelines=writing_guidelines,
         feedback=feedback_text
     )
-    
-    response = llm.invoke([HumanMessage(content=prompt)])
 
     try:
-        match = re.search(r"\{[\s\S]*\}", response.content)
+        raw = cerebras_invoke(prompt)
+    except Exception:
+        response = llm_invoke_with_retry(llm, [HumanMessage(content=prompt)], retries=4, wait=10)
+        raw = response.content
+
+    try:
+        match = re.search(r"\{[\s\S]*\}", raw)
         parsed = json.loads(match.group()) if match else {}
     except Exception:
         parsed = {}
 
+    raw_title = parsed.get("sectionTitle", section)
+    clean_title = re.sub(r"^(Body Section \d+:|Introduction:|Conclusion:|Section \d+:)\s*", "", raw_title).strip()
+
+    content = parsed.get("content", "")
+    if not content:
+        content_match = re.search(r'"content"\s*:\s*"([\s\S]*?)(?<!\\)",', raw)
+        if content_match:
+            content = content_match.group(1).replace('\\"', '"').replace("\\n", "\n")
+        else:
+            content = raw
+
+    content = re.sub(r"##\s*(SECTION|Image|Section)[^\n]*\n?", "", content)
+    content = re.sub(r"\{[^}]*\"required\"[^}]*\}", "", content, flags=re.DOTALL)
+    content = re.sub(r'"(sectionTitle|image|required|prompt|caption)"\s*:.*\n?', "", content)
+    content = re.sub(r'\{[\s\S]*?\}', "", content)
+    content = content.strip()
+
     return {
-        "sectionTitle": parsed.get("sectionTitle", section),
-        "content": parsed.get("content", response.content),
+        "sectionTitle": clean_title,
+        "content": content,
         "image": parsed.get("image", {"required": False, "prompt": "", "caption": ""})
     }
 
@@ -455,7 +509,7 @@ def run_metadata_generator(topic: str, audience: str, narrative: dict, sections:
         word_count=total_words
     )
 
-    response = llm.invoke([HumanMessage(content=prompt)])
+    response = llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
 
     try:
         match = re.search(r"\{[\s\S]*\}", response.content)
@@ -533,7 +587,7 @@ def run_mcq_generator(topic: str, audience: str, sections: list) -> dict:
         sections_summary=sections_summary
     )
 
-    response = llm.invoke([HumanMessage(content=prompt)])
+    response = llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
 
     try:
         match = re.search(r"\{[\s\S]*\}", response.content)
@@ -559,6 +613,8 @@ def generate_blog(topic: str, audience: str) -> dict:
 
     for i, section in enumerate(narrative["outline"]):
         print(f"[3/6] Writing section {i+1}/{len(narrative['outline'])}: {section}")
+        if i > 0:
+            time.sleep(SECTION_QUEUE_DELAY)
         result = run_section_pipeline(topic, section, audience, narrative)
         sections.append(result)
         section_researches.append({"facts": []})

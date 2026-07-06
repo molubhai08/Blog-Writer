@@ -1,10 +1,58 @@
 "use client"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useParams } from "next/navigation"
 import { Blog } from "@/types/blog"
 import MCQQuiz from "@/components/MCQQuiz"
-import { Clock, Tag, BookOpen, ArrowLeft } from "lucide-react"
+import { Clock, Tag, BookOpen, ArrowLeft, Upload, X } from "lucide-react"
 import Link from "next/link"
+import Image from "next/image"
+
+function SectionImage({ caption, prompt }: { caption: string; prompt: string }) {
+  const [src, setSrc] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => setSrc(reader.result as string)
+    reader.readAsDataURL(file)
+  }
+
+  if (src) {
+    return (
+      <figure className="space-y-2">
+        <div className="relative rounded-xl overflow-hidden border border-gray-700 group">
+          <Image src={src} alt={caption} width={800} height={450} className="w-full object-cover" />
+          <button
+            onClick={() => setSrc(null)}
+            className="absolute top-2 right-2 bg-gray-900/80 hover:bg-red-500/80 text-white p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <figcaption className="text-xs text-gray-500 italic text-center">{caption}</figcaption>
+      </figure>
+    )
+  }
+
+  return (
+    <div
+      onClick={() => inputRef.current?.click()}
+      className="border-2 border-dashed border-gray-700 hover:border-orange-500 rounded-xl p-6 cursor-pointer transition-colors group"
+    >
+      <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
+      <div className="flex flex-col items-center gap-2 text-center">
+        <Upload className="w-5 h-5 text-gray-600 group-hover:text-orange-400 transition-colors" />
+        <p className="text-xs text-gray-500 group-hover:text-gray-400 transition-colors">
+          Click to upload image
+        </p>
+        <p className="text-xs text-gray-600 italic max-w-xs">Suggested: {prompt}</p>
+        <p className="text-xs text-gray-500 mt-1">{caption}</p>
+      </div>
+    </div>
+  )
+}
 
 export default function BlogPage() {
   const { slug } = useParams()
@@ -16,8 +64,11 @@ export default function BlogPage() {
   }, [slug])
 
   if (!blog) return (
-    <div className="min-h-screen bg-gray-900 flex items-center justify-center text-gray-500">
-      Blog not found.
+    <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+      <div className="text-center space-y-3">
+        <div className="w-6 h-6 border-2 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto" />
+        <p className="text-gray-500 text-sm">Loading blog...</p>
+      </div>
     </div>
   )
 
@@ -68,14 +119,15 @@ export default function BlogPage() {
 
         <div className="space-y-10">
           {sections.map((section, i) => (
-            <div key={i} className="space-y-3">
+            <div key={i} className="space-y-4">
               <h2 className="text-2xl font-bold text-white">{section.sectionTitle}</h2>
-              <p className="text-gray-300 leading-relaxed whitespace-pre-wrap">{section.content}</p>
               {section.image?.required && (
-                <div className="bg-gray-800 rounded-xl p-4 border border-gray-700 text-sm text-gray-400 italic">
-                  📷 {section.image.caption}
-                </div>
+                <SectionImage
+                  prompt={section.image.prompt}
+                  caption={section.image.caption}
+                />
               )}
+              <p className="text-gray-300 leading-relaxed whitespace-pre-wrap">{section.content}</p>
             </div>
           ))}
         </div>
