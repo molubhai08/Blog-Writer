@@ -1,1 +1,7 @@
 .env
+
+task.pdf
+
+backend/__pycache__
+
+backend/search.py
