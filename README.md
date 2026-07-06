@@ -9,34 +9,11 @@ A production-grade, multi-agent blog generation dashboard built to generate high
 The application coordinates a cooperative team of **6 specialized agents** communicating through state transitions and Server-Sent Events (SSE) to generate the final blog:
 
 ```mermaid
-graph TD
-    subgraph Client ["Client (Next.js Dashboard)"]
-        UI[Home Page] -->|POST /generate| API_Client[api.ts]
-        API_Client -->|Listen SSE| Progress[WorkflowProgress]
-        UI -->|Regenerate Section| API_Client
-    end
-
-    subgraph Backend ["Backend (FastAPI Team)"]
-        API_Client -->|SSE Stream| Main[main.py]
-        Main -->|1. Validate| Val[Topic Validator]
-        Main -->|2. Search| Res[Researcher Agent]
-        Main -->|3. Structure| Nar[Narrative Agent]
-        Main -->|4. Section Pipeline| Sec[Section Writer & Review Loop]
-        Sec -->|4a. Search| SecRes[Section Researcher]
-        Sec -->|4b. Write| Writer[Content Writer]
-        Sec -->|4c. Audit| Rev[Reviewer Agent]
-        Writer <-->|Feedback Loop| Rev
-        Main -->|5. References| Ref[Reference Generator]
-        Main -->|6. SEO Metadata| Meta[Metadata Generator]
-        Main -->|7. MCQs| MCQ[MCQ Generator]
-    end
-    
-    subgraph ThirdParty ["Third-Party Integrations"]
-        Res & SecRes -->|Search queries| Tavily[Tavily Search API]
-        Rev -->|Human Score Audit| Sapling[Sapling AI Detector API]
-        Writer -->|Primary Writer| Cerebras[Cerebras API / Groq Fallback]
-        Val & Nar & Meta & MCQ -->|Text generation| Groq[Groq API]
-    end
+graph LR
+    Topic["1. Input Topic"] --> Validator["2. Validate & Research"]
+    Validator --> Narrative["3. Create Outline"]
+    Narrative --> Writer["4. Section Write & Review"]
+    Writer --> Output["5. Create SEO & MCQ Quiz"]
 ```
 
 ### The Agent Team
