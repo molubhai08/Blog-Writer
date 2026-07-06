@@ -8,18 +8,22 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from typing import Annotated
 from typing_extensions import TypedDict
+import requests
 
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+SAPLING_API_KEY = os.getenv("SAPLING_API_KEY")
 RESEARCHER_MODEL = "llama-3.1-8b-instant"
 NARRATIVE_MODEL = "llama-3.3-70b-versatile"
 SECTION_RESEARCHER_MODEL = "llama-3.1-8b-instant"
-WRITER_MODEL = "llama-3.3-70b-versatile"
-REVIEWER_MODEL = "llama-3.3-70b-versatile"
+WRITER_MODEL = "llama-3.1-8b-instant"
+METADATA_MODEL = "llama-3.3-70b-versatile"
+MCQ_MODEL = "llama-3.3-70b-versatile"
 BLOG_TARGET_LENGTH = 1500
 MAX_RETRIES = 2
+MCQ_COUNT = 5
 
 
 # ── Shared State ────────────────────────────────────────────────────────────
@@ -73,24 +77,16 @@ def build_react_agent(llm, tools: list):
 
 def build_researcher():
     os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
-    search_tool = TavilySearchResults(max_results=4)
+    search_tool = TavilySearchResults(max_results=2)
     tools = [search_tool]
     llm = build_llm(RESEARCHER_MODEL, tools)
     return build_react_agent(llm, tools)
 
 
-RESEARCHER_PROMPT = """You are a research agent. Search for 5-6 key facts and articles about the topic below. Use the search tool 2 times with different queries.
+RESEARCHER_PROMPT = """Research agent. Find 5-6 facts about the topic. Use search tool twice with different queries.
 
-Return ONLY a valid JSON object like this:
-{{
-  "findings": [
-    {{"fact": "...", "url": "...", "title": "..."}},
-    ...
-  ],
-  "sources": ["url1", "url2", ...]
-}}
-
-No extra text. Just the JSON.
+Return ONLY JSON:
+{{"findings": [{{"fact": "...", "url": "...", "title": "..."}}], "sources": ["url1"]}}
 
 Topic: {topic}"""
 
@@ -114,14 +110,6 @@ def run_researcher(topic: str) -> dict:
         "findings": parsed.get("findings", [])[:6],
         "sources": parsed.get("sources", [])[:6]
     }
-
-
-# ── Quick test ───────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    import json
-    result = run_researcher("Climate Change impact on India")
-    print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
 # ── Narrative Agent ──────────────────────────────────────────────────────────
@@ -155,8 +143,8 @@ Return ONLY valid JSON:
 Rules:
 - If audience is UPSC, map the topic to the correct GS paper and subject using the reference above
 - If audience is Professional or General, set gsPaper to null and subject to a general category
-- writingInstructions should be 4-6 clear guidelines for the content writer
-- outline should have 5-7 logical sections for a {target_length}-word blog
+- writingInstructions should be 3-4 clear guidelines for the content writer
+- outline must have exactly 4 sections (Introduction, 2 body sections, Conclusion)
 - For UPSC: avoid political bias, use educational tone, include exam relevance
 - No extra text. Just JSON."""
 
@@ -204,28 +192,18 @@ def run_narrative_agent(topic: str, audience: str, research_data: dict) -> dict:
 
 def build_section_researcher():
     os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
-    search_tool = TavilySearchResults(max_results=3)
+    search_tool = TavilySearchResults(max_results=1)
     tools = [search_tool]
     llm = build_llm(SECTION_RESEARCHER_MODEL, tools)
     return build_react_agent(llm, tools)
 
 
-SECTION_RESEARCHER_PROMPT = """You are a section researcher. Find specific facts for this section.
+SECTION_RESEARCHER_PROMPT = """Find 2-3 facts for this section. Use search tool once.
+
+Return ONLY JSON: {{"facts": [{{"fact": "...", "source": "..."}}]}}
 
 SECTION: {section}
-TOPIC: {topic}
-
-Use the search tool to find 2-3 key facts relevant to this section only.
-
-Return JSON:
-{{
-  "facts": [
-    {{"fact": "...", "source": "..."}},
-    ...
-  ]
-}}
-
-No extra text."""
+TOPIC: {topic}"""
 
 
 def run_section_researcher(topic: str, section: str) -> dict:
@@ -317,79 +295,44 @@ def run_writer(topic: str, section: str, audience: str, section_research: dict, 
     )
     
     response = llm.invoke([HumanMessage(content=prompt)])
-    
+
     try:
         match = re.search(r"\{[\s\S]*\}", response.content)
         parsed = json.loads(match.group()) if match else {}
     except Exception:
         parsed = {}
-    
+
     return {
         "sectionTitle": parsed.get("sectionTitle", section),
-        "content": parsed.get("content", ""),
+        "content": parsed.get("content", response.content),
         "image": parsed.get("image", {"required": False, "prompt": "", "caption": ""})
     }
 
 
-# ── Reviewer Agent ───────────────────────────────────────────────────────────
+# ── Reviewer Agent (Sapling AI Detection) ───────────────────────────────────
 
-def build_reviewer():
-    llm = build_llm(REVIEWER_MODEL)
-    return llm
-
-
-REVIEWER_PROMPT = """You are a content reviewer. Evaluate this section for human-likeness.
-
-SECTION TITLE: {section_title}
-CONTENT:
-{content}
-
-EVALUATION CRITERIA:
-{guidelines}
-
-Score the content on human-likeness (0.0 to 1.0).
-
-Consider:
-- Sentence variety and length
-- Natural flow and transitions
-- Avoidance of robotic phrasing
-- Specific examples vs generic statements
-- Active voice usage
-
-Return JSON:
-{{
-  "humanScore": 0.85,
-  "feedback": "Specific issues if score < 0.7, otherwise empty string"
-}}
-
-No extra text."""
-
-
-def run_reviewer(section_title: str, content: str) -> dict:
-    import json, re
-    
-    para_path = Path(__file__).parent / "para.md"
-    guidelines = para_path.read_text(encoding="utf-8")
-    
-    llm = build_reviewer()
-    prompt = REVIEWER_PROMPT.format(
-        section_title=section_title,
-        content=content,
-        guidelines=guidelines
-    )
-    
-    response = llm.invoke([HumanMessage(content=prompt)])
-    
+def run_reviewer(content: str) -> dict:
     try:
-        match = re.search(r"\{[\s\S]*\}", response.content)
-        parsed = json.loads(match.group()) if match else {}
+        response = requests.post(
+            "https://api.sapling.ai/api/v1/aidetect",
+            json={"key": SAPLING_API_KEY, "text": content},
+            timeout=10
+        )
+        if response.status_code != 200 or not response.text.strip():
+            return {"humanScore": 1.0, "feedback": ""}
+
+        data = response.json()
+        ai_score = data.get("score", 0.0)
+        human_score = round(1.0 - ai_score, 2)
+
+        feedback = ""
+        if human_score < 0.7:
+            feedback = "Too AI-like. Use shorter varied sentences, fragments, rhetorical questions, and casual phrasing. Avoid uniform structure."
+
+        return {"humanScore": human_score, "feedback": feedback}
+
     except Exception:
-        parsed = {}
-    
-    return {
-        "humanScore": parsed.get("humanScore", 0.0),
-        "feedback": parsed.get("feedback", "")
-    }
+        return {"humanScore": 1.0, "feedback": ""}
 
 
 # ── Section Pipeline with Review Loop ────────────────────────────────────────
@@ -404,7 +347,7 @@ def run_section_pipeline(topic: str, section: str, audience: str, narrative: dic
         feedback = review["feedback"] if review and review["humanScore"] < 0.7 else ""
         
         written_section = run_writer(topic, section, audience, section_research, narrative, feedback)
-        review = run_reviewer(written_section["sectionTitle"], written_section["content"])
+        review = run_reviewer(written_section["content"])
         
         if review["humanScore"] >= 0.7:
             break
@@ -415,3 +358,235 @@ def run_section_pipeline(topic: str, section: str, audience: str, narrative: dic
         "humanScore": review["humanScore"],
         "image": written_section["image"]
     }
+
+
+# ── Reference Generator ──────────────────────────────────────────────────────
+
+def generate_references(main_research: dict, section_researches: list) -> dict:
+    all_sources = []
+    
+    for finding in main_research.get("findings", []):
+        all_sources.append({
+            "url": finding.get("url", ""),
+            "title": finding.get("title", "")
+        })
+    
+    for section_research in section_researches:
+        for fact in section_research.get("facts", []):
+            source = fact.get("source", "")
+            if source:
+                all_sources.append({
+                    "url": source,
+                    "title": ""
+                })
+    
+    seen_urls = set()
+    unique_sources = []
+    for src in all_sources:
+        url = src["url"]
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            unique_sources.append(src)
+    
+    references = [
+        {"id": i+1, "url": src["url"], "title": src["title"]}
+        for i, src in enumerate(unique_sources)
+    ]
+    
+    return {"references": references}
+
+
+# ── Metadata Generator ───────────────────────────────────────────────────────
+
+METADATA_PROMPT = """You are an SEO metadata specialist. Generate metadata for this blog.
+
+TOPIC: {topic}
+AUDIENCE: {audience}
+SUBJECT: {subject}
+
+BLOG CONTENT SUMMARY:
+{content_summary}
+
+SEO GUIDELINES:
+{seo_guidelines}
+
+Return ONLY valid JSON:
+{{
+  "title": "...",
+  "metaTitle": "...",
+  "metaDescription": "...",
+  "slug": "...",
+  "tags": ["...", "..."],
+  "primaryKeyword": "...",
+  "relatedKeywords": ["...", "..."],
+  "readingTime": 7
+}}
+
+Rules:
+- title: descriptive, includes primary keyword, 50-60 chars
+- metaTitle: same as title or slight variation, under 60 chars
+- metaDescription: 150-160 chars, includes primary keyword, describes the article
+- slug: lowercase, hyphen-separated, no special chars
+- tags: 5-8 relevant tags
+- readingTime: estimate in minutes based on {word_count} words (avg 200 words/min)
+- No extra text"""
+
+
+def run_metadata_generator(topic: str, audience: str, narrative: dict, sections: list) -> dict:
+    import json, re
+
+    seo_path = Path(__file__).parent / "seo.md"
+    seo_guidelines = seo_path.read_text(encoding="utf-8")
+
+    content_summary = "\n".join([
+        f"- {s['sectionTitle']}: {s['content'][:200]}..."
+        for s in sections
+    ])
+
+    total_words = sum(len(s["content"].split()) for s in sections)
+
+    llm = build_llm(METADATA_MODEL)
+    prompt = METADATA_PROMPT.format(
+        topic=topic,
+        audience=audience,
+        subject=narrative.get("subject", ""),
+        content_summary=content_summary,
+        seo_guidelines=seo_guidelines,
+        word_count=total_words
+    )
+
+    response = llm.invoke([HumanMessage(content=prompt)])
+
+    try:
+        match = re.search(r"\{[\s\S]*\}", response.content)
+        parsed = json.loads(match.group()) if match else {}
+    except Exception:
+        parsed = {}
+
+    reading_time = max(1, round(total_words / 200))
+
+    return {
+        "title": parsed.get("title", topic),
+        "metaTitle": parsed.get("metaTitle", topic),
+        "metaDescription": parsed.get("metaDescription", ""),
+        "slug": parsed.get("slug", topic.lower().replace(" ", "-")),
+        "tags": parsed.get("tags", []),
+        "primaryKeyword": parsed.get("primaryKeyword", ""),
+        "relatedKeywords": parsed.get("relatedKeywords", []),
+        "readingTime": reading_time
+    }
+
+
+# ── MCQ Generator ────────────────────────────────────────────────────────────
+
+MCQ_PROMPT = """You are an MCQ generator. Create {num_questions} multiple choice questions based on this blog content.
+
+TOPIC: {topic}
+AUDIENCE: {audience}
+
+BLOG SECTIONS:
+{sections_summary}
+
+Generate questions that test understanding of key concepts covered in the blog.
+
+Rules:
+- Each question should have 4 options (A, B, C, D)
+- Mark the correct answer
+- Questions should be clear and unambiguous
+- Avoid trick questions
+- For UPSC audience: make questions exam-relevant
+
+Return ONLY valid JSON:
+{{
+  "mcqs": [
+    {{
+      "question": "...",
+      "options": {{
+        "A": "...",
+        "B": "...",
+        "C": "...",
+        "D": "..."
+      }},
+      "correctAnswer": "A",
+      "explanation": "..."
+    }},
+    ...
+  ]
+}}
+
+No extra text."""
+
+
+def run_mcq_generator(topic: str, audience: str, sections: list) -> dict:
+    import json, re
+
+    sections_summary = "\n".join([
+        f"{s['sectionTitle']}:\n{s['content'][:300]}..."
+        for s in sections
+    ])
+
+    llm = build_llm(MCQ_MODEL)
+    prompt = MCQ_PROMPT.format(
+        num_questions=MCQ_COUNT,
+        topic=topic,
+        audience=audience,
+        sections_summary=sections_summary
+    )
+
+    response = llm.invoke([HumanMessage(content=prompt)])
+
+    try:
+        match = re.search(r"\{[\s\S]*\}", response.content)
+        parsed = json.loads(match.group()) if match else {}
+    except Exception:
+        parsed = {}
+
+    return {
+        "mcqs": parsed.get("mcqs", [])
+    }
+
+# ── Full Blog Assembler ──────────────────────────────────────────────────────
+
+def generate_blog(topic: str, audience: str) -> dict:
+    print(f"[1/6] Researching topic: {topic}")
+    main_research = run_researcher(topic)
+
+    print("[2/6] Building narrative and outline...")
+    narrative = run_narrative_agent(topic, audience, main_research)
+
+    sections = []
+    section_researches = []
+
+    for i, section in enumerate(narrative["outline"]):
+        print(f"[3/6] Writing section {i+1}/{len(narrative['outline'])}: {section}")
+        result = run_section_pipeline(topic, section, audience, narrative)
+        sections.append(result)
+        section_researches.append({"facts": []})
+
+    print("[4/6] Generating references...")
+    references = generate_references(main_research, section_researches)
+
+    print("[5/6] Generating metadata...")
+    metadata = run_metadata_generator(topic, audience, narrative, sections)
+
+    print("[6/6] Generating MCQs...")
+    mcqs = run_mcq_generator(topic, audience, sections)
+
+    return {
+        "metadata": metadata,
+        "narrative": {
+            "audience": narrative["audience"],
+            "subject": narrative["subject"],
+            "gsPaper": narrative.get("gsPaper"),
+            "writingInstructions": narrative["writingInstructions"]
+        },
+        "sections": sections,
+        "references": references["references"],
+        "mcqs": mcqs["mcqs"]
+    }
+
+
+if __name__ == "__main__":
+    import json
+    result = generate_blog("Climate Change impact on India", "UPSC")
+    print(json.dumps(result, indent=2, ensure_ascii=False))

@@ -1,7 +1,47 @@
+# Environment
 .env
 
+# Task file
 task.pdf
 
-backend/__pycache__
+# Python
+backend/__pycache__/
+backend/*.pyc
+backend/*.pyo
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
 
-backend/search.py
+# Python virtual env
+venv/
+.venv/
+env/
+
+# Test/temp files
+backend/sapling_test.py
+backend/researcher_output.*
+
+# Next.js
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# Node
+frontend/node_modules/
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
