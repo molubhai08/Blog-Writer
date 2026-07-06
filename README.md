@@ -10,13 +10,13 @@ The application coordinates a cooperative team of **6 specialized agents** commu
 
 ```mermaid
 graph TD
-    subgraph Client (Next.js Dashboard)
+    subgraph Client ["Client (Next.js Dashboard)"]
         UI[Home Page] -->|POST /generate| API_Client[api.ts]
         API_Client -->|Listen SSE| Progress[WorkflowProgress]
         UI -->|Regenerate Section| API_Client
     end
 
-    subgraph Backend (FastAPI Team)
+    subgraph Backend ["Backend (FastAPI Team)"]
         API_Client -->|SSE Stream| Main[main.py]
         Main -->|1. Validate| Val[Topic Validator]
         Main -->|2. Search| Res[Researcher Agent]
@@ -31,7 +31,7 @@ graph TD
         Main -->|7. MCQs| MCQ[MCQ Generator]
     end
     
-    subgraph Third-Party integrations
+    subgraph ThirdParty ["Third-Party Integrations"]
         Res & SecRes -->|Search queries| Tavily[Tavily Search API]
         Rev -->|Human Score Audit| Sapling[Sapling AI Detector API]
         Writer -->|Primary Writer| Cerebras[Cerebras API / Groq Fallback]
