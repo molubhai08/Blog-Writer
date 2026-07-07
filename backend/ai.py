@@ -34,9 +34,9 @@ if not CEREBRAS_KEYS:
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
-RESEARCHER_MODEL = "llama-3.1-8b-instant"
+RESEARCHER_MODEL = "llama-3.3-70b-versatile"
 NARRATIVE_MODEL = "llama-3.3-70b-versatile"
-SECTION_RESEARCHER_MODEL = "llama-3.1-8b-instant"
+SECTION_RESEARCHER_MODEL = "llama-3.3-70b-versatile"
 WRITER_MODEL = "llama-3.1-8b-instant"
 METADATA_MODEL = "llama-3.3-70b-versatile"
 MCQ_MODEL = "llama-3.3-70b-versatile"

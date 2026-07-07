@@ -23,6 +23,7 @@ export function generateBlog(
     if (!reader) return onError("No response stream")
 
     let buffer = ""
+    let completed = false
 
     while (true) {
       const { done, value } = await reader.read()
@@ -42,10 +43,14 @@ export function generateBlog(
 
         if (event === "status") onStatus(data)
         else if (event === "section") onSection(data.index, data.section)
-        else if (event === "complete") onComplete(data)
-        else if (event === "error") onError(data.message)
-        else if (event === "conflict") onConflict(data.conflictSlug, data.conflictTitle)
+        else if (event === "complete") { completed = true; onComplete(data) }
+        else if (event === "error") { completed = true; onError(data.message) }
+        else if (event === "conflict") { completed = true; onConflict(data.conflictSlug, data.conflictTitle) }
       }
+    }
+
+    if (!completed) {
+      onError("The server closed the connection before finishing. A backend agent may have crashed — check server logs.")
     }
   }).catch((e) => {
     console.error("Generate API failed:", e)
