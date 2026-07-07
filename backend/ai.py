@@ -59,6 +59,23 @@ if CEREBRAS_API_KEY:
         cerebras_client = None
 
 
+def is_truncated_json(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    has_json = '{' in stripped or '[' in stripped
+    if not has_json:
+        return False
+    open_b = stripped.count('{') - stripped.count('}')
+    open_sq = stripped.count('[') - stripped.count(']')
+    if open_b > 0 or open_sq > 0:
+        return True
+    quote_count = stripped.count('"') - stripped.count('\\"')
+    if quote_count % 2 != 0:
+        return True
+    return False
+
+
 def cerebras_invoke(prompt: str, api_key: str = None) -> str:
     client = None
     if api_key:
@@ -76,7 +93,10 @@ def cerebras_invoke(prompt: str, api_key: str = None) -> str:
         temperature=0.3,
         max_tokens=4096,
     )
-    return response.choices[0].message.content
+    content = response.choices[0].message.content
+    if is_truncated_json(content):
+        raise ValueError("Cerebras response was truncated mid-generation")
+    return content
 
 
 def robust_json_loads(json_str: str) -> dict:
@@ -142,9 +162,21 @@ def invoke_agent_with_fallback(prompt: str, fallback_model: str, api_key: str = 
             return cerebras_invoke(prompt, api_key=c_key)
         except Exception:
             pass
-    llm = build_llm(fallback_model, api_key=api_key)
-    response = llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
-    return response.content
+
+    for attempt in range(len(GROQ_KEYS) if GROQ_KEYS else 1):
+        key = GROQ_KEYS[attempt % len(GROQ_KEYS)] if GROQ_KEYS else api_key
+        llm = build_llm(fallback_model, api_key=key)
+        try:
+            response = llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
+            content = response.content
+            if is_truncated_json(content) and attempt < len(GROQ_KEYS) - 1:
+                continue
+            return content
+        except Exception as e:
+            if attempt < len(GROQ_KEYS) - 1:
+                continue
+            raise
+
 
 
 # ── Shared State ────────────────────────────────────────────────────────────

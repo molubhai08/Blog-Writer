@@ -5,7 +5,6 @@ import { generateBlog, fetchBlogs, deleteBlog, publishBlog, suggestTopics } from
 import { Blog, Section, StatusEvent, Audience } from "@/types/blog"
 import WorkflowProgress from "@/components/WorkflowProgress"
 import BlogView from "@/components/BlogView"
-import AgentConsole from "@/components/AgentConsole"
 import Link from "next/link"
 import { Sparkles, BookOpen, Clock, AlertTriangle, Trash2, BookOpenCheck, ChevronDown, ChevronUp, Lightbulb } from "lucide-react"
 
@@ -341,7 +340,6 @@ export default function Home() {
             {showProgress && (
               <div className="space-y-4">
                 <WorkflowProgress statuses={statuses} outline={outline} audience={audience} />
-                <AgentConsole logs={logs} />
               </div>
             )}
           </div>
@@ -357,7 +355,6 @@ export default function Home() {
               >
                 ← New Blog
               </button>
-              <AgentConsole logs={logs} />
             </div>
             <BlogView
               blog={blog}
