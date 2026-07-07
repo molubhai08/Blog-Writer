@@ -155,10 +155,20 @@ export default function Home() {
             <button
               onClick={() => setHistoryOpen(!historyOpen)}
               disabled={history.length === 0}
-              className="flex items-center gap-2 text-xs text-gray-400 hover:text-white border border-gray-700 hover:border-gray-500 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className={`flex items-center gap-2 text-sm px-4 py-2 rounded-xl transition-all duration-350 ${
+                historyOpen
+                  ? "bg-orange-500 text-white shadow-lg shadow-orange-500/20"
+                  : "bg-orange-500/10 text-orange-400 border border-orange-500/30 hover:bg-orange-500/20 hover:border-orange-500/50"
+              } disabled:opacity-30 disabled:cursor-not-allowed font-medium`}
             >
-              <Clock className="w-3.5 h-3.5" />
-              {history.length} Published {historyOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              <Clock className="w-4 h-4" />
+              <span>Published Library</span>
+              <span className={`inline-flex items-center justify-center px-2 py-0.5 text-xs font-bold rounded-full ${
+                historyOpen ? "bg-white text-orange-600" : "bg-orange-500 text-white"
+              }`}>
+                {history.length}
+              </span>
+              {historyOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
             </button>
             <span className="text-xs text-gray-500 font-mono">AI Blog Machine</span>
           </div>
@@ -172,9 +182,9 @@ export default function Home() {
             </div>
             <div className="max-h-60 overflow-y-auto divide-y divide-gray-800">
               {history.map((h) => (
-                <Link
+                <div
                   key={h.slug}
-                  href={`/blog/${h.slug}`}
+                  onClick={() => router.push(`/blog/${h.slug}`)}
                   className="flex items-center justify-between px-4 py-3 hover:bg-gray-900 group transition-colors cursor-pointer"
                 >
                   <div>
@@ -184,8 +194,24 @@ export default function Home() {
                       <span className="text-xs text-gray-600">{h.slug}</span>
                     </div>
                   </div>
-                  <BookOpenCheck className="w-4 h-4 text-gray-600 group-hover:text-orange-400 transition-colors shrink-0" />
-                </Link>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation()
+                        if (confirm(`Are you sure you want to delete "${h.topic}"?`)) {
+                          await deleteBlog(h.slug)
+                          const data = await fetchBlogs()
+                          setHistory(Array.isArray(data) ? data : [])
+                        }
+                      }}
+                      className="text-gray-500 hover:text-red-400 p-1.5 rounded transition-colors"
+                      title="Delete blog"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                    <BookOpenCheck className="w-4 h-4 text-gray-600 group-hover:text-orange-400 transition-colors shrink-0" />
+                  </div>
+                </div>
               ))}
             </div>
           </div>

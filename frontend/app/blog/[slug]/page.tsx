@@ -1,12 +1,12 @@
 "use client"
 import React, { useEffect, useRef, useState } from "react"
-import { useParams } from "next/navigation"
+import { useParams, useRouter } from "next/navigation"
 import { Blog, Section } from "@/types/blog"
 import MCQQuiz from "@/components/MCQQuiz"
-import { Clock, Tag, BookOpen, ArrowLeft, Upload, X, List, GraduationCap } from "lucide-react"
+import { Clock, Tag, BookOpen, ArrowLeft, Upload, X, List, GraduationCap, Trash2 } from "lucide-react"
 import Link from "next/link"
 import Image from "next/image"
-import { fetchBlogBySlug } from "@/lib/api"
+import { fetchBlogBySlug, deleteBlog } from "@/lib/api"
 
 
 // ── Section Image Upload ─────────────────────────────────────────────────────
@@ -94,12 +94,12 @@ function renderContentWithLinks(content: string) {
 
 export default function BlogPage() {
   const { slug } = useParams()
+  const router = useRouter()
   const [blog, setBlog] = useState<Blog | null>(null)
 
   useEffect(() => {
     async function load() {
       if (!slug) return
-      // Try fetching from Supabase via backend API first
       try {
         const apiData = await fetchBlogBySlug(slug as string)
         if (apiData && apiData.metadata) {
@@ -107,12 +107,18 @@ export default function BlogPage() {
           return
         }
       } catch (_) {}
-      // Fall back to localStorage for backward compatibility
       const stored = localStorage.getItem(`blog_${slug}`)
       if (stored) setBlog(JSON.parse(stored))
     }
     load()
   }, [slug])
+
+  async function handleDelete() {
+    if (confirm("Are you sure you want to delete this published blog?")) {
+      await deleteBlog(slug as string)
+      router.push("/")
+    }
+  }
 
   if (!blog) return (
     <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -129,9 +135,17 @@ export default function BlogPage() {
     <div className="min-h-screen bg-gray-900 text-white">
       <header className="border-b border-gray-800 px-6 py-4">
         <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2 text-gray-400 hover:text-white text-sm transition-colors">
-            <ArrowLeft className="w-4 h-4" /> Back to Generator
-          </Link>
+          <div className="flex items-center gap-4">
+            <Link href="/" className="flex items-center gap-2 text-gray-400 hover:text-white text-sm transition-colors">
+              <ArrowLeft className="w-4 h-4" /> Back to Generator
+            </Link>
+            <button
+              onClick={handleDelete}
+              className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 border border-red-500/30 hover:border-red-500/60 px-2.5 py-1 rounded-lg transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Delete Blog
+            </button>
+          </div>
           <span className="text-orange-500 font-bold text-lg">Aspire IAS</span>
         </div>
       </header>
