@@ -1,11 +1,38 @@
 "use client"
 import { useEffect, useRef, useState } from "react"
 import { useParams } from "next/navigation"
-import { Blog } from "@/types/blog"
+import { Blog, Section } from "@/types/blog"
 import MCQQuiz from "@/components/MCQQuiz"
-import { Clock, Tag, BookOpen, ArrowLeft, Upload, X } from "lucide-react"
+import { Clock, Tag, BookOpen, ArrowLeft, Upload, X, List, GraduationCap } from "lucide-react"
 import Link from "next/link"
 import Image from "next/image"
+import { fetchBlogBySlug } from "@/lib/api"
+
+// ── Intra-link renderer ──────────────────────────────────────────────────────
+
+function renderWithLinks(content: string, sections: Section[]) {
+  const parts = content.split(/(\[\[LINK:\d+:[^\]]+\]\])/g)
+  return parts.map((part, i) => {
+    const match = part.match(/^\[\[LINK:(\d+):([^\]]+)\]\]$/)
+    if (match) {
+      const idx = parseInt(match[1])
+      const word = match[2]
+      return (
+        <a
+          key={i}
+          href={`#section-${idx}`}
+          className="text-orange-400 hover:text-orange-300 underline underline-offset-2 decoration-orange-500/50 transition-colors"
+          title={`Jump to: ${sections[idx]?.sectionTitle}`}
+        >
+          {word}
+        </a>
+      )
+    }
+    return <span key={i}>{part}</span>
+  })
+}
+
+// ── Section Image Upload ─────────────────────────────────────────────────────
 
 function SectionImage({ caption, prompt }: { caption: string; prompt: string }) {
   const [src, setSrc] = useState<string | null>(null)
@@ -54,13 +81,28 @@ function SectionImage({ caption, prompt }: { caption: string; prompt: string }) 
   )
 }
 
+// ── Blog Page ────────────────────────────────────────────────────────────────
+
 export default function BlogPage() {
   const { slug } = useParams()
   const [blog, setBlog] = useState<Blog | null>(null)
 
   useEffect(() => {
-    const stored = localStorage.getItem(`blog_${slug}`)
-    if (stored) setBlog(JSON.parse(stored))
+    async function load() {
+      if (!slug) return
+      // Try fetching from Supabase via backend API first
+      try {
+        const apiData = await fetchBlogBySlug(slug as string)
+        if (apiData && apiData.metadata) {
+          setBlog(apiData)
+          return
+        }
+      } catch (_) {}
+      // Fall back to localStorage for backward compatibility
+      const stored = localStorage.getItem(`blog_${slug}`)
+      if (stored) setBlog(JSON.parse(stored))
+    }
+    load()
   }, [slug])
 
   if (!blog) return (
@@ -72,7 +114,7 @@ export default function BlogPage() {
     </div>
   )
 
-  const { metadata, narrative, sections, references, mcqs } = blog
+  const { metadata, narrative, sections, references, mcqs, upscCallout } = blog
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
@@ -86,6 +128,7 @@ export default function BlogPage() {
       </header>
 
       <main className="max-w-3xl mx-auto px-6 py-12 space-y-10">
+        {/* Header */}
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2">
             {narrative.gsPaper && (
@@ -117,9 +160,33 @@ export default function BlogPage() {
           </div>
         </div>
 
+        {/* Table of Contents */}
+        {sections.length > 0 && (
+          <nav className="bg-gray-950 border-l-4 border-orange-500 rounded-r-xl px-5 py-4 space-y-2">
+            <div className="flex items-center gap-2 text-orange-400 text-xs font-semibold uppercase tracking-widest mb-3">
+              <List className="w-3.5 h-3.5" />
+              Table of Contents
+            </div>
+            <ol className="space-y-1.5 list-none">
+              {sections.map((section, i) => (
+                <li key={i}>
+                  <a
+                    href={`#section-${i}`}
+                    className="flex items-start gap-2 text-sm text-gray-400 hover:text-orange-400 transition-colors group"
+                  >
+                    <span className="font-mono text-orange-500/60 text-xs mt-0.5 shrink-0">{i + 1}.</span>
+                    <span className="group-hover:underline underline-offset-2">{section.sectionTitle}</span>
+                  </a>
+                </li>
+              ))}
+            </ol>
+          </nav>
+        )}
+
+        {/* Sections */}
         <div className="space-y-10">
           {sections.map((section, i) => (
-            <div key={i} className="space-y-4">
+            <div key={i} id={`section-${i}`} className="space-y-4 scroll-mt-6">
               <h2 className="text-2xl font-bold text-white">{section.sectionTitle}</h2>
               {section.image?.required && (
                 <SectionImage
@@ -127,11 +194,41 @@ export default function BlogPage() {
                   caption={section.image.caption}
                 />
               )}
-              <p className="text-gray-300 leading-relaxed whitespace-pre-wrap">{section.content}</p>
+              <p className="text-gray-300 leading-relaxed whitespace-pre-wrap">
+                {renderWithLinks(section.content, sections)}
+              </p>
             </div>
           ))}
         </div>
 
+        {/* UPSC Mains Callout */}
+        {upscCallout && upscCallout.mainsQuestion && (
+          <div className="border border-orange-500/30 bg-orange-500/5 rounded-xl p-6 space-y-4">
+            <div className="flex items-center gap-2 text-orange-400 font-semibold text-sm">
+              <GraduationCap className="w-4 h-4" />
+              UPSC Mains Practice Question ({narrative.gsPaper})
+            </div>
+            <p className="text-gray-200 text-sm leading-relaxed font-medium">{upscCallout.mainsQuestion}</p>
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500 uppercase tracking-widest">Approach</p>
+              <p className="text-gray-400 text-sm italic">{upscCallout.approach}</p>
+            </div>
+            {upscCallout.keywordsToWrite.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs text-gray-500 uppercase tracking-widest">Keywords to Include</p>
+                <div className="flex flex-wrap gap-2">
+                  {upscCallout.keywordsToWrite.map((kw) => (
+                    <span key={kw} className="text-xs bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2 py-1 rounded-full">
+                      {kw}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* References */}
         {references.length > 0 && (
           <div className="border-t border-gray-800 pt-8 space-y-3">
             <h3 className="text-gray-400 text-xs uppercase tracking-widest">References</h3>
@@ -148,6 +245,7 @@ export default function BlogPage() {
           </div>
         )}
 
+        {/* MCQ Quiz */}
         {mcqs.length > 0 && (
           <div className="border-t border-gray-800 pt-8">
             <MCQQuiz mcqs={mcqs} />

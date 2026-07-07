@@ -19,6 +19,8 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 SAPLING_API_KEY = os.getenv("SAPLING_API_KEY")
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
 RESEARCHER_MODEL = "llama-3.1-8b-instant"
 NARRATIVE_MODEL = "llama-3.3-70b-versatile"
@@ -121,6 +123,24 @@ def validate_topic(topic: str) -> dict:
     if len(topic_clean.split()) == 1 and len(topic_clean) < 4:
         return {"valid": False, "reason": "Single short words are not valid topics. Please expand your topic description."}
 
+    # Supabase conflict check: compare against past blog topics using cosine similarity
+    try:
+        past_blogs = get_supabase_topics()
+        for blog in past_blogs:
+            past_topic = blog.get("topic", "")
+            sim = topic_similarity(topic_clean, past_topic)
+            if sim >= 0.9:
+                title = blog.get("title", past_topic)
+                return {
+                    "valid": False,
+                    "conflict": True,
+                    "reason": f"A highly similar blog already exists: \"{title}\".",
+                    "conflictSlug": blog.get("slug", ""),
+                    "conflictTitle": title
+                }
+    except Exception:
+        pass  # If Supabase check fails, continue to LLM validation
+
     llm = build_llm(VALIDATOR_MODEL)
     prompt = VALIDATOR_PROMPT.format(topic=topic.strip())
     try:
@@ -133,6 +153,98 @@ def validate_topic(topic: str) -> dict:
         }
     except Exception:
         return {"valid": True, "reason": ""}
+
+
+
+# ── Supabase REST Helpers ───────────────────────────────────────────────────────────
+
+def _supabase_headers() -> dict:
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
+    }
+
+
+def supabase_request(method: str, path: str, json_data=None, params=None):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    try:
+        resp = requests.request(
+            method, url,
+            headers=_supabase_headers(),
+            json=json_data,
+            params=params,
+            timeout=10
+        )
+        if resp.status_code in (200, 201, 204):
+            try:
+                return resp.json()
+            except Exception:
+                return {}
+        return None
+    except Exception:
+        return None
+
+
+def get_supabase_topics() -> list:
+    result = supabase_request(
+        "GET", "blogs",
+        params={"select": "slug,topic,data->>title", "order": "created_at.desc"}
+    )
+    if not result:
+        return []
+    return result
+
+
+def topic_similarity(topic_a: str, topic_b: str) -> float:
+    import re, math
+    from collections import Counter
+
+    def tokenize(text: str) -> list:
+        return re.findall(r'\b[a-z]{3,}\b', text.lower())
+
+    STOPWORDS = {'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all',
+                 'can', 'her', 'was', 'one', 'our', 'out', 'day', 'has'}
+
+    tokens_a = [t for t in tokenize(topic_a) if t not in STOPWORDS]
+    tokens_b = [t for t in tokenize(topic_b) if t not in STOPWORDS]
+
+    if not tokens_a or not tokens_b:
+        return 0.0
+
+    all_tokens = list(set(tokens_a) | set(tokens_b))
+    vec_a = Counter(tokens_a)
+    vec_b = Counter(tokens_b)
+
+    dot = sum(vec_a.get(t, 0) * vec_b.get(t, 0) for t in all_tokens)
+    mag_a = math.sqrt(sum(v ** 2 for v in vec_a.values()))
+    mag_b = math.sqrt(sum(v ** 2 for v in vec_b.values()))
+
+    if mag_a == 0 or mag_b == 0:
+        return 0.0
+    return dot / (mag_a * mag_b)
+
+
+def save_blog_to_supabase(slug: str, topic: str, audience: str, blog_data: dict):
+    supabase_request(
+        "POST", "blogs",
+        json_data={
+            "slug": slug,
+            "topic": topic,
+            "audience": audience,
+            "data": blog_data
+        }
+    )
+
+
+def delete_blog_from_supabase(slug: str):
+    supabase_request(
+        "DELETE", "blogs",
+        params={"slug": f"eq.{slug}"}
+    )
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -707,7 +819,124 @@ def run_mcq_generator(topic: str, audience: str, sections: list) -> dict:
         "mcqs": parsed.get("mcqs", [])
     }
 
-# ── Full Blog Assembler ──────────────────────────────────────────────────────
+
+# ── UPSC Mains Callout Generator ─────────────────────────────────────────────
+
+UPSC_CALLOUT_PROMPT = """You are a UPSC Mains exam specialist. Based on this blog topic and content, generate a UPSC Mains practice callout.
+
+TOPIC: {topic}
+GS PAPER: {gs_paper}
+SUBJECT: {subject}
+
+BLOG SUMMARY:
+{content_summary}
+
+Return ONLY valid JSON:
+{{
+  "mainsQuestion": "A realistic UPSC Mains 250-word question on this topic",
+  "keywordsToWrite": ["keyword1", "keyword2", "keyword3"],
+  "approach": "Brief 1-line approach to answer this question"
+}}
+
+No extra text."""
+
+
+def run_upsc_callout(topic: str, gs_paper: str, subject: str, sections: list) -> dict:
+    import json, re
+
+    content_summary = "\n".join([
+        f"- {s['sectionTitle']}: {s['content'][:150]}..."
+        for s in sections
+    ])
+
+    prompt = UPSC_CALLOUT_PROMPT.format(
+        topic=topic,
+        gs_paper=gs_paper,
+        subject=subject,
+        content_summary=content_summary
+    )
+
+    try:
+        raw_response = invoke_agent_with_fallback(prompt, NARRATIVE_MODEL)
+        match = re.search(r"\{[\s\S]*\}", raw_response)
+        parsed = json.loads(match.group()) if match else {}
+    except Exception:
+        parsed = {}
+
+    return {
+        "mainsQuestion": parsed.get("mainsQuestion", ""),
+        "keywordsToWrite": parsed.get("keywordsToWrite", []),
+        "approach": parsed.get("approach", "")
+    }
+
+
+# ── Intra-Link Engine (TF-IDF + Cosine Similarity) ───────────────────────────
+
+def apply_intra_links(sections: list) -> list:
+    import re, math
+    from collections import Counter
+
+    def tokenize(text: str) -> list:
+        return re.findall(r'\b[a-z]{4,}\b', text.lower())
+
+    STOPWORDS = {
+        'this', 'that', 'with', 'from', 'have', 'been', 'will', 'they',
+        'their', 'these', 'which', 'were', 'also', 'some', 'more', 'into',
+        'than', 'when', 'what', 'where', 'such', 'over', 'about', 'through',
+        'after', 'under', 'while', 'there', 'other', 'many', 'both', 'each'
+    }
+
+    docs = [tokenize(s['content']) for s in sections]
+    N = len(docs)
+
+    # TF per document
+    tfs = [Counter(doc) for doc in docs]
+
+    # IDF across all documents
+    all_terms = set(term for doc in docs for term in doc)
+    idf = {}
+    for term in all_terms:
+        if term in STOPWORDS:
+            continue
+        df = sum(1 for doc in docs if term in doc)
+        idf[term] = math.log((N + 1) / (df + 1))
+
+    # Top 2 TF-IDF keywords per section
+    top_keywords = []
+    for i, tf in enumerate(tfs):
+        scores = {}
+        for term, count in tf.items():
+            if term in idf:
+                scores[term] = (count / max(len(docs[i]), 1)) * idf[term]
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        top_keywords.append([kw for kw, _ in ranked[:2]])
+
+    # Build cross-section link map: {keyword: target_section_index}
+    link_map = {}
+    for target_idx, keywords in enumerate(top_keywords):
+        for kw in keywords:
+            link_map[kw] = target_idx
+
+    # Apply markers to content — only first occurrence per keyword per section
+    result = []
+    for src_idx, section in enumerate(sections):
+        content = section['content']
+        used = set()
+        for kw, target_idx in link_map.items():
+            if target_idx == src_idx:
+                continue  # Don't link a section to itself
+            if kw in used:
+                continue
+            # Match whole word, case-insensitive, first occurrence only
+            pattern = re.compile(r'(?<![\w])(' + re.escape(kw) + r')(?![\w])', re.IGNORECASE)
+            match = pattern.search(content)
+            if match:
+                replacement = f'[[LINK:{target_idx}:{match.group(1)}]]'
+                content = content[:match.start()] + replacement + content[match.end():]
+                used.add(kw)
+        result.append({**section, 'content': content})
+    return result
+
 
 def generate_blog(topic: str, audience: str) -> dict:
     print(f"[0/6] Validating topic: {topic}")

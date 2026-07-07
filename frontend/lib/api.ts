@@ -6,7 +6,8 @@ export function generateBlog(
   onStatus: (event: { step: string; message: string; done: boolean; data?: Record<string, unknown> }) => void,
   onSection: (index: number, section: unknown) => void,
   onComplete: (blog: unknown) => void,
-  onError: (err: string) => void
+  onError: (err: string) => void,
+  onConflict: (conflictSlug: string, conflictTitle: string) => void
 ) {
   fetch(`${API}/generate`, {
     method: "POST",
@@ -39,6 +40,7 @@ export function generateBlog(
         else if (event === "section") onSection(data.index, data.section)
         else if (event === "complete") onComplete(data)
         else if (event === "error") onError(data.message)
+        else if (event === "conflict") onConflict(data.conflictSlug, data.conflictTitle)
       }
     }
   }).catch((e) => onError(e.message))
@@ -56,4 +58,18 @@ export async function regenerateSection(
     body: JSON.stringify({ topic, audience, sectionTitle, narrative }),
   })
   return res.json()
+}
+
+export async function fetchBlogs() {
+  const res = await fetch(`${API}/blogs`)
+  return res.json()
+}
+
+export async function fetchBlogBySlug(slug: string) {
+  const res = await fetch(`${API}/blog/${slug}`)
+  return res.json()
+}
+
+export async function deleteBlog(slug: string) {
+  await fetch(`${API}/blog/${slug}`, { method: "DELETE" })
 }

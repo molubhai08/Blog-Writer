@@ -11,7 +11,14 @@ from ai import (
     generate_references,
     run_metadata_generator,
     run_mcq_generator,
+    run_upsc_callout,
+    apply_intra_links,
     validate_topic,
+    save_blog_to_supabase,
+    delete_blog_from_supabase,
+    get_supabase_topics,
+    topic_similarity,
+    supabase_request,
 )
 
 app = FastAPI()
@@ -46,7 +53,15 @@ async def stream_blog(topic: str, audience: str):
     yield sse("status", {"step": "validator", "message": "Validating topic...", "done": False})
     validation = await loop.run_in_executor(None, validate_topic, topic)
     if not validation["valid"]:
-        yield sse("error", {"message": validation["reason"]})
+        # Check if this is a Supabase conflict (similar topic exists)
+        if validation.get("conflict"):
+            yield sse("conflict", {
+                "message": validation["reason"],
+                "conflictSlug": validation.get("conflictSlug", ""),
+                "conflictTitle": validation.get("conflictTitle", "")
+            })
+        else:
+            yield sse("error", {"message": validation["reason"]})
         return
     yield sse("status", {"step": "validator", "message": "Topic validated", "done": True})
 
@@ -90,7 +105,20 @@ async def stream_blog(topic: str, audience: str):
     mcqs = await loop.run_in_executor(None, run_mcq_generator, topic, audience, sections)
     yield sse("status", {"step": "mcqs", "message": "Quiz ready", "done": True})
 
-    yield sse("complete", {
+    # Apply TF-IDF intra-links across sections
+    sections = apply_intra_links(sections)
+
+    # UPSC Mains callout (only for UPSC audience)
+    upsc_callout = None
+    if audience == "UPSC" and narrative.get("gsPaper"):
+        yield sse("status", {"step": "upsc_callout", "message": "Generating UPSC Mains callout...", "done": False})
+        upsc_callout = await loop.run_in_executor(
+            None, run_upsc_callout,
+            topic, narrative["gsPaper"], narrative.get("subject", ""), sections
+        )
+        yield sse("status", {"step": "upsc_callout", "message": "Mains callout ready", "done": True})
+
+    blog_payload = {
         "metadata": metadata,
         "narrative": {
             "audience": narrative["audience"],
@@ -100,8 +128,17 @@ async def stream_blog(topic: str, audience: str):
         },
         "sections": sections,
         "references": references["references"],
-        "mcqs": mcqs["mcqs"]
-    })
+        "mcqs": mcqs["mcqs"],
+        "upscCallout": upsc_callout
+    }
+
+    # Save to Supabase
+    await loop.run_in_executor(
+        None, save_blog_to_supabase,
+        metadata["slug"], topic, audience, blog_payload
+    )
+
+    yield sse("complete", blog_payload)
 
 
 @app.post("/generate")
@@ -120,3 +157,27 @@ async def regenerate_section(req: RegenerateRequest):
         None, run_section_pipeline, req.topic, req.sectionTitle, req.audience, req.narrative
     )
     return result["section"]
+
+
+@app.get("/blogs")
+async def list_blogs():
+    result = get_supabase_topics()
+    return result or []
+
+
+@app.get("/blog/{slug}")
+async def get_blog(slug: str):
+    result = supabase_request(
+        "GET", "blogs",
+        params={"select": "data", "slug": f"eq.{slug}", "limit": "1"}
+    )
+    if result and len(result) > 0:
+        return result[0]["data"]
+    return {}
+
+
+@app.delete("/blog/{slug}")
+async def delete_blog(slug: str):
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, delete_blog_from_supabase, slug)
+    return {"deleted": slug}

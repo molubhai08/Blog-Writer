@@ -57,12 +57,19 @@ export interface Narrative {
   writingInstructions: string[]
 }
 
+export interface UpscCallout {
+  mainsQuestion: string
+  keywordsToWrite: string[]
+  approach: string
+}
+
 export interface Blog {
   metadata: Metadata
   narrative: Narrative
   sections: Section[]
   references: Reference[]
   mcqs: MCQ[]
+  upscCallout?: UpscCallout | null
 }
 
 export interface StatusEvent {
