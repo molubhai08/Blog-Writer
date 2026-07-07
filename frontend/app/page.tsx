@@ -5,8 +5,21 @@ import { generateBlog, fetchBlogs, deleteBlog, publishBlog } from "@/lib/api"
 import { Blog, Section, StatusEvent, Audience } from "@/types/blog"
 import WorkflowProgress from "@/components/WorkflowProgress"
 import BlogView from "@/components/BlogView"
+import AgentConsole from "@/components/AgentConsole"
 import Link from "next/link"
 import { Sparkles, BookOpen, Clock, AlertTriangle, Trash2, BookOpenCheck, ChevronDown, ChevronUp } from "lucide-react"
+
+function getAgentName(step: string): string {
+  if (step === "validator") return "Topic Validator"
+  if (step === "researcher") return "Web Researcher"
+  if (step === "narrative") return "Narrative Finder"
+  if (step.startsWith("section_")) return "Content Writer"
+  if (step === "references") return "Reference Manager"
+  if (step === "metadata") return "SEO Specialist"
+  if (step === "mcqs") return "MCQ Generator"
+  if (step === "upsc_callout") return "Mains Specialist"
+  return "System"
+}
 
 interface BlogSummary {
   slug: string
@@ -34,6 +47,7 @@ export default function Home() {
   const [history, setHistory] = useState<BlogSummary[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [deletingSlug, setDeletingSlug] = useState<string | null>(null)
+  const [logs, setLogs] = useState<string[]>([])
 
   // Load blog history on mount
   useEffect(() => {
@@ -51,6 +65,7 @@ export default function Home() {
     setOutline([])
     setError("")
     setConflict(null)
+    setLogs([])
 
     generateBlog(
       t,
@@ -60,6 +75,11 @@ export default function Home() {
         if (status.step === "narrative" && status.done && status.data?.outline) {
           setOutline(status.data.outline as string[])
         }
+
+        const agentName = getAgentName(status.step)
+        const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        const logMsg = `[${timeStr}] [${agentName}] ${status.message}`
+        setLogs((prev) => [...prev, logMsg])
       },
       (index, section) => {
         setBlog((prev) => {
@@ -72,16 +92,22 @@ export default function Home() {
       (completeBlog) => {
         setBlog(completeBlog as Blog)
         setLoading(false)
+        const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        setLogs((prev) => [...prev, `[${timeStr}] [System] Blog generation complete! ready to preview and publish.`])
       },
       (err) => {
         setError(err)
         setLoading(false)
         setStatuses({})
+        const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        setLogs((prev) => [...prev, `[${timeStr}] [System] Error occurred: ${err}`])
       },
       (conflictSlug, conflictTitle) => {
         setConflict({ slug: conflictSlug, title: conflictTitle })
         setLoading(false)
         setStatuses({})
+        const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        setLogs((prev) => [...prev, `[${timeStr}] [System] Conflict detected: Similar blog already exists titled "${conflictTitle}".`])
       }
     )
   }
@@ -256,21 +282,25 @@ export default function Home() {
             )}
 
             {showProgress && (
-              <WorkflowProgress statuses={statuses} outline={outline} />
+              <div className="space-y-4">
+                <WorkflowProgress statuses={statuses} outline={outline} audience={audience} />
+                <AgentConsole logs={logs} />
+              </div>
             )}
           </div>
         )}
 
         {blog && (
           <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-6">
-            <div className="lg:sticky lg:top-6 lg:self-start">
-              <WorkflowProgress statuses={statuses} outline={outline} />
+            <div className="lg:sticky lg:top-6 lg:self-start space-y-4">
+              <WorkflowProgress statuses={statuses} outline={outline} audience={audience} />
               <button
-                onClick={() => { setBlog(null); setStatuses({}); setOutline([]) }}
-                className="mt-3 w-full py-2 text-sm text-gray-500 hover:text-white border border-gray-800 rounded-xl transition-colors"
+                onClick={() => { setBlog(null); setStatuses({}); setOutline([]); setLogs([]) }}
+                className="w-full py-2 text-sm text-gray-500 hover:text-white border border-gray-800 rounded-xl transition-colors"
               >
                 ← New Blog
               </button>
+              <AgentConsole logs={logs} />
             </div>
             <BlogView
               blog={blog}

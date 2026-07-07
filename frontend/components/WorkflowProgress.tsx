@@ -13,14 +13,16 @@ const STEPS = [
   { key: "references", label: "Generating References" },
   { key: "metadata", label: "Generating Metadata" },
   { key: "mcqs", label: "Creating Quiz" },
+  { key: "upsc_callout", label: "Generating UPSC Mains Callout" },
 ]
 
 interface Props {
   statuses: Record<string, StatusEvent>
   outline: string[]
+  audience?: string
 }
 
-export default function WorkflowProgress({ statuses, outline }: Props) {
+export default function WorkflowProgress({ statuses, outline, audience }: Props) {
   const steps = STEPS.map((s) => {
     const sectionMatch = s.key.match(/^section_(\d+)$/)
     if (sectionMatch) {
@@ -29,6 +31,10 @@ export default function WorkflowProgress({ statuses, outline }: Props) {
     }
     return s
   }).filter((s) => {
+    // Only show the UPSC Mains Callout step when audience is UPSC
+    if (s.key === "upsc_callout") {
+      return audience === "UPSC"
+    }
     const sectionMatch = s.key.match(/^section_(\d+)$/)
     if (sectionMatch) {
       const i = parseInt(sectionMatch[1])

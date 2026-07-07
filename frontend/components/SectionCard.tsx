@@ -1,9 +1,41 @@
 "use client"
 import { Section, Narrative } from "@/types/blog"
 import { RefreshCw, ChevronDown, ChevronUp, ImageIcon } from "lucide-react"
-import { useState } from "react"
+import React, { useState } from "react"
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+
+// Parses [[LINK:target_idx:keyword]] markers into clickable anchor tags
+function renderContentWithLinks(content: string) {
+  const regex = /\[\[LINK:(\d+):(.*?)\]\]/g
+  const parts: (string | React.ReactElement)[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = regex.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(content.substring(lastIndex, match.index))
+    }
+    const targetIdx = match[1]
+    const keyword = match[2]
+    parts.push(
+      <a
+        key={match.index}
+        href={`#section-${targetIdx}`}
+        className="text-orange-400 hover:underline font-medium border-b border-orange-500/20"
+      >
+        {keyword}
+      </a>
+    )
+    lastIndex = regex.lastIndex
+  }
+
+  if (lastIndex < content.length) {
+    parts.push(content.substring(lastIndex))
+  }
+
+  return parts.length > 0 ? parts : [content]
+}
 
 interface Props {
   section: Section
@@ -61,7 +93,7 @@ export default function SectionCard({ section, index, topic, audience, narrative
 
       {expanded && (
         <div className="px-5 py-4 space-y-4">
-          <p className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap">{section.content}</p>
+          <p className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap">{renderContentWithLinks(section.content)}</p>
 
           {section.image?.required && (
             <div className="flex items-start gap-3 bg-gray-900 rounded-lg p-3 border border-gray-800">

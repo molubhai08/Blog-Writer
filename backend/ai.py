@@ -949,18 +949,20 @@ def apply_intra_links(sections: list) -> list:
     # IDF across all documents
     all_terms = set(term for doc in docs for term in doc)
     idf = {}
+    doc_frequencies = {}
     for term in all_terms:
         if term in STOPWORDS:
             continue
         df = sum(1 for doc in docs if term in doc)
+        doc_frequencies[term] = df
         idf[term] = math.log((N + 1) / (df + 1))
 
-    # Top 2 TF-IDF keywords per section
+    # Top 2 TF-IDF keywords per section that are ALSO mentioned in other sections (df > 1)
     top_keywords = []
     for i, tf in enumerate(tfs):
         scores = {}
         for term, count in tf.items():
-            if term in idf:
+            if term in idf and doc_frequencies[term] > 1:
                 scores[term] = (count / max(len(docs[i]), 1)) * idf[term]
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         top_keywords.append([kw for kw, _ in ranked[:2]])
@@ -969,7 +971,8 @@ def apply_intra_links(sections: list) -> list:
     link_map = {}
     for target_idx, keywords in enumerate(top_keywords):
         for kw in keywords:
-            link_map[kw] = target_idx
+            if kw not in link_map:
+                link_map[kw] = target_idx
 
     # Apply markers to content — only first occurrence per keyword per section
     result = []

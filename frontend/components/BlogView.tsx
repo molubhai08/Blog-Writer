@@ -1,8 +1,8 @@
 "use client"
-import { Blog, Section, Narrative } from "@/types/blog"
+import { Blog, Section, Narrative, UpscCallout } from "@/types/blog"
 import SectionCard from "./SectionCard"
 import MCQQuiz from "./MCQQuiz"
-import { Clock, Tag, BookOpen } from "lucide-react"
+import { Clock, Tag, BookOpen, GraduationCap } from "lucide-react"
 
 interface Props {
   blog: Blog
@@ -13,7 +13,7 @@ interface Props {
 }
 
 export default function BlogView({ blog, topic, audience, onSectionUpdate, onPublish }: Props) {
-  const { metadata, narrative, sections, references, mcqs } = blog
+  const { metadata, narrative, sections, references, mcqs, upscCallout } = blog
 
   return (
     <div className="space-y-8">
@@ -69,6 +69,33 @@ export default function BlogView({ blog, topic, audience, onSectionUpdate, onPub
           />
         ))}
       </div>
+
+      {/* UPSC Mains Callout Preview — only visible for UPSC audience before publishing */}
+      {audience === "UPSC" && upscCallout && upscCallout.mainsQuestion && (
+        <div className="border border-orange-500/30 bg-orange-500/5 rounded-xl p-6 space-y-4">
+          <div className="flex items-center gap-2 text-orange-400 font-semibold text-sm">
+            <GraduationCap className="w-4 h-4" />
+            UPSC Mains Practice Question ({narrative.gsPaper})
+          </div>
+          <p className="text-gray-200 text-sm leading-relaxed font-medium">{upscCallout.mainsQuestion}</p>
+          <div className="space-y-2">
+            <p className="text-xs text-gray-500 uppercase tracking-widest">Approach</p>
+            <p className="text-gray-400 text-sm italic">{upscCallout.approach}</p>
+          </div>
+          {upscCallout.keywordsToWrite.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500 uppercase tracking-widest">Keywords to Include</p>
+              <div className="flex flex-wrap gap-2">
+                {upscCallout.keywordsToWrite.map((kw) => (
+                  <span key={kw} className="text-xs bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2 py-1 rounded-full">
+                    {kw}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {mcqs.length > 0 && (
         <div className="bg-gray-950 border border-gray-800 rounded-xl p-6">

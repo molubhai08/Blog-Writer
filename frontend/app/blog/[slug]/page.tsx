@@ -1,5 +1,5 @@
 "use client"
-import { useEffect, useRef, useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import { useParams } from "next/navigation"
 import { Blog, Section } from "@/types/blog"
 import MCQQuiz from "@/components/MCQQuiz"
@@ -8,29 +8,6 @@ import Link from "next/link"
 import Image from "next/image"
 import { fetchBlogBySlug } from "@/lib/api"
 
-// ── Intra-link renderer ──────────────────────────────────────────────────────
-
-function renderWithLinks(content: string, sections: Section[]) {
-  const parts = content.split(/(\[\[LINK:\d+:[^\]]+\]\])/g)
-  return parts.map((part, i) => {
-    const match = part.match(/^\[\[LINK:(\d+):([^\]]+)\]\]$/)
-    if (match) {
-      const idx = parseInt(match[1])
-      const word = match[2]
-      return (
-        <a
-          key={i}
-          href={`#section-${idx}`}
-          className="text-orange-400 hover:text-orange-300 underline underline-offset-2 decoration-orange-500/50 transition-colors"
-          title={`Jump to: ${sections[idx]?.sectionTitle}`}
-        >
-          {word}
-        </a>
-      )
-    }
-    return <span key={i}>{part}</span>
-  })
-}
 
 // ── Section Image Upload ─────────────────────────────────────────────────────
 
@@ -79,6 +56,38 @@ function SectionImage({ caption, prompt }: { caption: string; prompt: string }) 
       </div>
     </div>
   )
+}
+
+// Parses [[LINK:target_idx:keyword]] markers into clickable anchor tags
+function renderContentWithLinks(content: string) {
+  const regex = /\[\[LINK:(\d+):(.*?)\]\]/g
+  const parts: (string | React.ReactElement)[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = regex.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(content.substring(lastIndex, match.index))
+    }
+    const targetIdx = match[1]
+    const keyword = match[2]
+    parts.push(
+      <a
+        key={match.index}
+        href={`#section-${targetIdx}`}
+        className="text-orange-400 hover:underline font-medium border-b border-orange-500/20"
+      >
+        {keyword}
+      </a>
+    )
+    lastIndex = regex.lastIndex
+  }
+
+  if (lastIndex < content.length) {
+    parts.push(content.substring(lastIndex))
+  }
+
+  return parts.length > 0 ? parts : [content]
 }
 
 // ── Blog Page ────────────────────────────────────────────────────────────────
@@ -195,7 +204,7 @@ export default function BlogPage() {
                 />
               )}
               <p className="text-gray-300 leading-relaxed whitespace-pre-wrap">
-                {renderWithLinks(section.content, sections)}
+                {renderContentWithLinks(section.content)}
               </p>
             </div>
           ))}

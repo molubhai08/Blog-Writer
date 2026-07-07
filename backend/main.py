@@ -101,12 +101,10 @@ async def stream_blog(topic: str, audience: str):
     metadata = await loop.run_in_executor(None, run_metadata_generator, topic, audience, narrative, sections)
     yield sse("status", {"step": "metadata", "message": "Metadata ready", "done": True})
 
+    # Generate MCQs
     yield sse("status", {"step": "mcqs", "message": "Generating quiz...", "done": False})
     mcqs = await loop.run_in_executor(None, run_mcq_generator, topic, audience, sections)
     yield sse("status", {"step": "mcqs", "message": "Quiz ready", "done": True})
-
-    # Apply TF-IDF intra-links across sections
-    sections = apply_intra_links(sections)
 
     # UPSC Mains callout (only for UPSC audience)
     upsc_callout = None
@@ -118,6 +116,9 @@ async def stream_blog(topic: str, audience: str):
         )
         yield sse("status", {"step": "upsc_callout", "message": "Mains callout ready", "done": True})
 
+    # Apply intra-linking markers to section content before sending the payload
+    linked_sections = apply_intra_links(sections)
+
     blog_payload = {
         "metadata": metadata,
         "narrative": {
@@ -126,7 +127,7 @@ async def stream_blog(topic: str, audience: str):
             "gsPaper": narrative.get("gsPaper"),
             "writingInstructions": narrative["writingInstructions"]
         },
-        "sections": sections,
+        "sections": linked_sections,
         "references": references["references"],
         "mcqs": mcqs["mcqs"],
         "upscCallout": upsc_callout
