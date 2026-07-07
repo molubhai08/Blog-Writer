@@ -1,7 +1,7 @@
 "use client"
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { generateBlog, fetchBlogs, deleteBlog } from "@/lib/api"
+import { generateBlog, fetchBlogs, deleteBlog, publishBlog } from "@/lib/api"
 import { Blog, Section, StatusEvent, Audience } from "@/types/blog"
 import WorkflowProgress from "@/components/WorkflowProgress"
 import BlogView from "@/components/BlogView"
@@ -104,10 +104,13 @@ export default function Home() {
     })
   }
 
-  function handlePublish() {
+  async function handlePublish() {
     if (!blog) return
     const slug = blog.metadata.slug
+    // Save to localStorage as backup
     localStorage.setItem(`blog_${slug}`, JSON.stringify(blog))
+    // Save to Supabase (only triggered on explicit Publish click)
+    await publishBlog(topic, audience, blog)
     router.push(`/blog/${slug}`)
   }
 

@@ -54,8 +54,50 @@ def cerebras_invoke(prompt: str) -> str:
         model=CEREBRAS_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
+        max_tokens=4096,  # Prevent truncation on long outputs
     )
     return response.choices[0].message.content
+
+
+def robust_json_loads(json_str: str) -> dict:
+    import json, re
+    if not json_str:
+        return {}
+    
+    cleaned = json_str.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\n", "", cleaned)
+        cleaned = re.sub(r"\n```$", "", cleaned)
+    cleaned = cleaned.strip()
+
+    match = re.search(r"\{[\s\S]*\}", cleaned)
+    if not match:
+        return {}
+    obj_str = match.group()
+
+    # Strip trailing commas in objects and arrays to prevent strict JSON parsing failures
+    obj_str = re.sub(r',\s*\}', '}', obj_str)
+    obj_str = re.sub(r',\s*\]', ']', obj_str)
+
+    try:
+        return json.loads(obj_str)
+    except json.JSONDecodeError:
+        # Simple bracket completion logic if the response was truncated mid-way
+        open_braces = obj_str.count('{')
+        close_braces = obj_str.count('}')
+        open_brackets = obj_str.count('[')
+        close_brackets = obj_str.count(']')
+
+        repaired = obj_str
+        if open_brackets > close_brackets:
+            repaired += ']' * (open_brackets - close_brackets)
+        if open_braces > close_braces:
+            repaired += '}' * (open_braces - close_braces)
+            
+        try:
+            return json.loads(repaired)
+        except Exception:
+            return {}
 
 
 def invoke_agent_with_fallback(prompt: str, fallback_model: str) -> str:
@@ -129,7 +171,7 @@ def validate_topic(topic: str) -> dict:
         for blog in past_blogs:
             past_topic = blog.get("topic", "")
             sim = topic_similarity(topic_clean, past_topic)
-            if sim >= 0.6:
+            if sim >= 0.75:
                 title = blog.get("title", past_topic)
                 return {
                     "valid": False,
@@ -749,11 +791,7 @@ def run_metadata_generator(topic: str, audience: str, narrative: dict, sections:
 
     raw_response = invoke_agent_with_fallback(prompt, METADATA_MODEL)
 
-    try:
-        match = re.search(r"\{[\s\S]*\}", raw_response)
-        parsed = json.loads(match.group()) if match else {}
-    except Exception:
-        parsed = {}
+    parsed = robust_json_loads(raw_response)
 
     reading_time = max(1, round(total_words / 200))
 
@@ -826,11 +864,10 @@ def run_mcq_generator(topic: str, audience: str, sections: list) -> dict:
 
     raw_response = invoke_agent_with_fallback(prompt, MCQ_MODEL)
 
-    try:
-        match = re.search(r"\{[\s\S]*\}", raw_response)
-        parsed = json.loads(match.group()) if match else {}
-    except Exception:
-        parsed = {}
+    print(f"[MCQ] Raw model response (first 300 chars):\n{raw_response[:300]}")
+
+    parsed = robust_json_loads(raw_response)
+    print(f"[MCQ] Parsed result. Questions count: {len(parsed.get('mcqs', []))}")
 
     return {
         "mcqs": parsed.get("mcqs", [])

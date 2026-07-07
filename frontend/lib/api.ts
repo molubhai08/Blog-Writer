@@ -73,3 +73,12 @@ export async function fetchBlogBySlug(slug: string) {
 export async function deleteBlog(slug: string) {
   await fetch(`${API}/blog/${slug}`, { method: "DELETE" })
 }
+
+export async function publishBlog(topic: string, audience: string, blog: unknown) {
+  const res = await fetch(`${API}/publish`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ topic, audience, blog }),
+  })
+  return res.json()
+}

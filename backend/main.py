@@ -132,12 +132,7 @@ async def stream_blog(topic: str, audience: str):
         "upscCallout": upsc_callout
     }
 
-    # Save to Supabase
-    await loop.run_in_executor(
-        None, save_blog_to_supabase,
-        metadata["slug"], topic, audience, blog_payload
-    )
-
+    # NOTE: Blog is NOT saved here — it is saved only when the user clicks Publish
     yield sse("complete", blog_payload)
 
 
@@ -181,3 +176,22 @@ async def delete_blog(slug: str):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, delete_blog_from_supabase, slug)
     return {"deleted": slug}
+
+
+class PublishRequest(BaseModel):
+    topic: str
+    audience: str
+    blog: dict
+
+
+@app.post("/publish")
+async def publish_blog(req: PublishRequest):
+    loop = asyncio.get_event_loop()
+    slug = req.blog.get("metadata", {}).get("slug", "")
+    if not slug:
+        return {"error": "Missing slug"}
+    await loop.run_in_executor(
+        None, save_blog_to_supabase,
+        slug, req.topic, req.audience, req.blog
+    )
+    return {"published": slug}
