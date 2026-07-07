@@ -129,7 +129,7 @@ def validate_topic(topic: str) -> dict:
         for blog in past_blogs:
             past_topic = blog.get("topic", "")
             sim = topic_similarity(topic_clean, past_topic)
-            if sim >= 0.9:
+            if sim >= 0.6:
                 title = blog.get("title", past_topic)
                 return {
                     "valid": False,
@@ -170,7 +170,12 @@ def _supabase_headers() -> dict:
 def supabase_request(method: str, path: str, json_data=None, params=None):
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None
-    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    # Clean the base URL by stripping trailing slashes and any /rest/v1 suffix
+    base_url = SUPABASE_URL.strip().rstrip("/")
+    if base_url.endswith("/rest/v1"):
+        base_url = base_url[:-8].rstrip("/")
+        
+    url = f"{base_url}/rest/v1/{path}"
     try:
         resp = requests.request(
             method, url,
@@ -203,14 +208,26 @@ def topic_similarity(topic_a: str, topic_b: str) -> float:
     import re, math
     from collections import Counter
 
+    # Acronym mapping: expand 'ai' to 'artificial intelligence'
+    t_a = re.sub(r'\bai\b', 'artificial intelligence', topic_a.lower())
+    t_b = re.sub(r'\bai\b', 'artificial intelligence', topic_b.lower())
+
     def tokenize(text: str) -> list:
-        return re.findall(r'\b[a-z]{3,}\b', text.lower())
+        return re.findall(r'\b[a-z]{2,}\b', text)
+
+    def clean_word(word: str) -> str:
+        w = word.lower()
+        if w in ("indian", "indians"):
+            return "india"
+        if w == "services":
+            return "service"
+        return w
 
     STOPWORDS = {'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all',
-                 'can', 'her', 'was', 'one', 'our', 'out', 'day', 'has'}
+                 'can', 'her', 'was', 'one', 'our', 'out', 'day', 'has', 'on', 'of', 'in'}
 
-    tokens_a = [t for t in tokenize(topic_a) if t not in STOPWORDS]
-    tokens_b = [t for t in tokenize(topic_b) if t not in STOPWORDS]
+    tokens_a = [clean_word(t) for t in tokenize(t_a) if t not in STOPWORDS]
+    tokens_b = [clean_word(t) for t in tokenize(t_b) if t not in STOPWORDS]
 
     if not tokens_a or not tokens_b:
         return 0.0

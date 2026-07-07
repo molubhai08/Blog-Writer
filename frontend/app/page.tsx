@@ -1,10 +1,12 @@
 "use client"
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { generateBlog, fetchBlogs, deleteBlog } from "@/lib/api"
 import { Blog, Section, StatusEvent, Audience } from "@/types/blog"
 import WorkflowProgress from "@/components/WorkflowProgress"
 import BlogView from "@/components/BlogView"
-import { Sparkles, BookOpen, Clock, AlertTriangle, Trash2, ExternalLink, ChevronDown, ChevronUp } from "lucide-react"
+import Link from "next/link"
+import { Sparkles, BookOpen, Clock, AlertTriangle, Trash2, BookOpenCheck, ChevronDown, ChevronUp } from "lucide-react"
 
 interface BlogSummary {
   slug: string
@@ -20,6 +22,7 @@ interface ConflictState {
 }
 
 export default function Home() {
+  const router = useRouter()
   const [topic, setTopic] = useState("")
   const [audience, setAudience] = useState<Audience>("UPSC")
   const [loading, setLoading] = useState(false)
@@ -105,7 +108,7 @@ export default function Home() {
     if (!blog) return
     const slug = blog.metadata.slug
     localStorage.setItem(`blog_${slug}`, JSON.stringify(blog))
-    window.open(`/blog/${slug}`, "_blank")
+    router.push(`/blog/${slug}`)
   }
 
   const isGenerating = loading
@@ -120,15 +123,14 @@ export default function Home() {
             <span className="text-xl font-bold">Aspire IAS</span>
           </div>
           <div className="flex items-center gap-3">
-            {history.length > 0 && (
-              <button
-                onClick={() => setHistoryOpen(!historyOpen)}
-                className="flex items-center gap-2 text-xs text-gray-400 hover:text-white border border-gray-700 hover:border-gray-500 px-3 py-1.5 rounded-lg transition-colors"
-              >
-                <Clock className="w-3.5 h-3.5" />
-                {history.length} Published {historyOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-              </button>
-            )}
+            <button
+              onClick={() => setHistoryOpen(!historyOpen)}
+              disabled={history.length === 0}
+              className="flex items-center gap-2 text-xs text-gray-400 hover:text-white border border-gray-700 hover:border-gray-500 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Clock className="w-3.5 h-3.5" />
+              {history.length} Published {historyOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            </button>
             <span className="text-xs text-gray-500 font-mono">AI Blog Machine</span>
           </div>
         </div>
@@ -141,23 +143,20 @@ export default function Home() {
             </div>
             <div className="max-h-60 overflow-y-auto divide-y divide-gray-800">
               {history.map((h) => (
-                <div key={h.slug} className="flex items-center justify-between px-4 py-3 hover:bg-gray-900 group">
+                <Link
+                  key={h.slug}
+                  href={`/blog/${h.slug}`}
+                  className="flex items-center justify-between px-4 py-3 hover:bg-gray-900 group transition-colors cursor-pointer"
+                >
                   <div>
-                    <p className="text-sm text-white font-medium">{h.topic}</p>
+                    <p className="text-sm text-white font-medium group-hover:text-orange-400 transition-colors">{h.topic}</p>
                     <div className="flex items-center gap-2 mt-0.5">
                       <span className="text-xs text-orange-400">{h.audience}</span>
                       <span className="text-xs text-gray-600">{h.slug}</span>
                     </div>
                   </div>
-                  <a
-                    href={`/blog/${h.slug}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-gray-600 hover:text-orange-400 transition-colors opacity-0 group-hover:opacity-100"
-                  >
-                    <ExternalLink className="w-4 h-4" />
-                  </a>
-                </div>
+                  <BookOpenCheck className="w-4 h-4 text-gray-600 group-hover:text-orange-400 transition-colors shrink-0" />
+                </Link>
               ))}
             </div>
           </div>
@@ -235,14 +234,12 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="flex gap-3">
-                  <a
+                  <Link
                     href={`/blog/${conflict.slug}`}
-                    target="_blank"
-                    rel="noreferrer"
                     className="flex-1 text-center py-2.5 text-sm border border-gray-700 text-gray-300 hover:text-white hover:border-gray-500 rounded-xl transition-colors flex items-center justify-center gap-2"
                   >
-                    <ExternalLink className="w-4 h-4" /> Read Existing
-                  </a>
+                    <BookOpenCheck className="w-4 h-4" /> Read Existing
+                  </Link>
                   <button
                     onClick={handleDeleteAndRegenerate}
                     disabled={!!deletingSlug}
