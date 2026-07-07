@@ -80,18 +80,33 @@ async def stream_blog(topic: str, audience: str):
         "subject": narrative.get("subject")
     }})
 
-    sections = []
-    section_researches = []
+    sections_built = [None] * len(narrative["outline"])
+    facts_built = [None] * len(narrative["outline"])
 
     for i, section in enumerate(narrative["outline"]):
         yield sse("status", {"step": f"section_{i}", "message": f"Writing: {section}", "done": False})
-        result = await loop.run_in_executor(None, run_section_pipeline, topic, section, audience, narrative)
-        sections.append(result["section"])
-        section_researches.append({"facts": result["facts"]})
-        yield sse("section", {"index": i, "section": result["section"]})
-        yield sse("status", {"step": f"section_{i}", "message": f"Done: {section}", "done": True, "data": {
-            "humanScore": result["section"]["humanScore"]
-        }})
+
+    async def run_section_staggered(i: int, section_title: str) -> tuple:
+        await asyncio.sleep(i * 4)
+        result = await loop.run_in_executor(None, run_section_pipeline, topic, section_title, audience, narrative)
+        return i, section_title, result
+
+    tasks = [asyncio.create_task(run_section_staggered(i, s)) for i, s in enumerate(narrative["outline"])]
+    pending = set(tasks)
+
+    while pending:
+        done_set, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for completed in done_set:
+            idx, section_title, result = completed.result()
+            sections_built[idx] = result["section"]
+            facts_built[idx] = {"facts": result["facts"]}
+            yield sse("section", {"index": idx, "section": result["section"]})
+            yield sse("status", {"step": f"section_{idx}", "message": f"Done: {section_title}", "done": True, "data": {
+                "humanScore": result["section"]["humanScore"]
+            }})
+
+    sections = sections_built
+    section_researches = facts_built
 
     yield sse("status", {"step": "references", "message": "Generating references...", "done": False})
     references = generate_references(main_research, section_researches)
@@ -116,8 +131,17 @@ async def stream_blog(topic: str, audience: str):
         )
         yield sse("status", {"step": "upsc_callout", "message": "Mains callout ready", "done": True})
 
+    # Build keyword list from LLM-extracted metadata: primary keyword + related + tags
+    # These are semantically meaningful terms (e.g. "Human-Wildlife Conflict", "HWC")
+    # guaranteed not to include generic words like "cannot" or "life"
+    intra_link_keywords = []
+    if metadata.get("primaryKeyword"):
+        intra_link_keywords.append(metadata["primaryKeyword"])
+    intra_link_keywords.extend(metadata.get("relatedKeywords", []))
+    intra_link_keywords.extend(metadata.get("tags", []))
+
     # Apply intra-linking markers to section content before sending the payload
-    linked_sections = apply_intra_links(sections)
+    linked_sections = apply_intra_links(sections, intra_link_keywords)
 
     blog_payload = {
         "metadata": metadata,

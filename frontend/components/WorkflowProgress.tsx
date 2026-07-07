@@ -1,6 +1,6 @@
 "use client"
 import { StatusEvent } from "@/types/blog"
-import { CheckCircle, Circle, Loader } from "lucide-react"
+import { CheckCircle, Circle, Loader, Zap } from "lucide-react"
 
 const STEPS = [
   { key: "validator", label: "Validating Topic" },
@@ -31,7 +31,6 @@ export default function WorkflowProgress({ statuses, outline, audience }: Props)
     }
     return s
   }).filter((s) => {
-    // Only show the UPSC Mains Callout step when audience is UPSC
     if (s.key === "upsc_callout") {
       return audience === "UPSC"
     }
@@ -43,31 +42,56 @@ export default function WorkflowProgress({ statuses, outline, audience }: Props)
     return true
   })
 
+  const activeSectionCount = steps.filter((s) => {
+    const isSectionStep = /^section_\d+$/.test(s.key)
+    const status = statuses[s.key]
+    return isSectionStep && status && !status.done
+  }).length
+
+  const isRunningParallel = activeSectionCount >= 2
+
   return (
     <div className="bg-gray-950 border border-gray-800 rounded-xl p-5 font-mono text-sm">
-      <p className="text-gray-400 text-xs mb-4 uppercase tracking-widest">AI Workflow</p>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-gray-400 text-xs uppercase tracking-widest">AI Workflow</p>
+        {isRunningParallel && (
+          <span className="flex items-center gap-1 text-[10px] font-semibold text-yellow-400 bg-yellow-400/10 border border-yellow-400/20 px-2 py-0.5 rounded-full animate-pulse">
+            <Zap className="w-2.5 h-2.5" />
+            {activeSectionCount} parallel
+          </span>
+        )}
+      </div>
       <div className="space-y-2">
         {steps.map((step) => {
           const status = statuses[step.key]
           const isDone = status?.done
           const isActive = status && !status.done
+          const isSectionStep = /^section_\d+$/.test(step.key)
 
           return (
             <div key={step.key}>
-              <div className="flex items-center gap-3">
+              <div className={`flex items-center gap-3 rounded-lg px-2 py-1 transition-all ${isActive && isSectionStep && isRunningParallel ? "bg-yellow-400/5 border border-yellow-400/10" : ""}`}>
                 {isDone ? (
                   <CheckCircle className="w-4 h-4 text-green-400 shrink-0" />
                 ) : isActive ? (
-                  <Loader className="w-4 h-4 text-orange-400 animate-spin shrink-0" />
+                  <Loader className={`w-4 h-4 shrink-0 animate-spin ${isSectionStep && isRunningParallel ? "text-yellow-400" : "text-orange-400"}`} />
                 ) : (
                   <Circle className="w-4 h-4 text-gray-700 shrink-0" />
                 )}
-                <span className={isDone ? "text-green-400" : isActive ? "text-orange-300" : "text-gray-600"}>
+                <span className={
+                  isDone
+                    ? "text-green-400"
+                    : isActive
+                    ? isSectionStep && isRunningParallel
+                      ? "text-yellow-300"
+                      : "text-orange-300"
+                    : "text-gray-600"
+                }>
                   {step.label}
                 </span>
               </div>
               {isDone && status?.data && (
-                <div className="ml-7 mt-1 text-xs text-gray-500 space-y-0.5">
+                <div className="ml-9 mt-1 text-xs text-gray-500 space-y-0.5">
                   {Object.entries(status.data).map(([k, v]) => (
                     <div key={k} className="break-all">
                       <span className="text-gray-600">{k}: </span>

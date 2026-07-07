@@ -106,7 +106,6 @@ def invoke_agent_with_fallback(prompt: str, fallback_model: str) -> str:
             return cerebras_invoke(prompt)
         except Exception:
             pass
-    # Fallback to Groq
     llm = build_llm(fallback_model)
     response = llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
     return response.content
@@ -312,7 +311,7 @@ class AgentState(TypedDict):
 # ── Reusable LLM builder ─────────────────────────────────────────────────────
 
 def build_llm(model: str, tools: list = []):
-    llm = ChatGroq(api_key=GROQ_API_KEY, model=model, temperature=0.3)
+    llm = ChatGroq(api_key=GROQ_API_KEY, model=model, temperature=0.3, max_tokens=4096)
     if tools:
         return llm.bind_tools(tools)
     return llm
@@ -924,73 +923,63 @@ def run_upsc_callout(topic: str, gs_paper: str, subject: str, sections: list) ->
     }
 
 
-# ── Intra-Link Engine (TF-IDF + Cosine Similarity) ───────────────────────────
+# ── Intra-Link Engine (Hybrid: LLM keywords + section frequency) ─────────────
 
-def apply_intra_links(sections: list) -> list:
-    import re, math
-    from collections import Counter
+def apply_intra_links(sections: list, keywords: list = []) -> list:
+    """
+    Links LLM-extracted keywords (primaryKeyword, relatedKeywords, tags) across
+    sections of the blog. For each keyword:
+      - Finds which section mentions it the most (the "home" section)
+      - In all other sections that mention it, replaces the FIRST occurrence
+        with a [[LINK:home_idx:original_text]] marker
+    Supports multi-word phrases, hyphenated terms, and acronyms.
+    Falls back gracefully if no keywords are supplied.
+    """
+    import re
 
-    def tokenize(text: str) -> list:
-        return re.findall(r'\b[a-z]{4,}\b', text.lower())
+    if not keywords or not sections:
+        return sections
 
-    STOPWORDS = {
-        'this', 'that', 'with', 'from', 'have', 'been', 'will', 'they',
-        'their', 'these', 'which', 'were', 'also', 'some', 'more', 'into',
-        'than', 'when', 'what', 'where', 'such', 'over', 'about', 'through',
-        'after', 'under', 'while', 'there', 'other', 'many', 'both', 'each'
-    }
+    # Deduplicate and sort keywords: longest first so multi-word phrases are
+    # matched before their sub-words (e.g. "Climate Change" before "Change")
+    seen = set()
+    unique_keywords = []
+    for kw in keywords:
+        kw_clean = kw.strip()
+        if kw_clean and kw_clean.lower() not in seen:
+            seen.add(kw_clean.lower())
+            unique_keywords.append(kw_clean)
+    unique_keywords.sort(key=len, reverse=True)
 
-    docs = [tokenize(s['content']) for s in sections]
-    N = len(docs)
+    # For each keyword, count occurrences in each section to find the "home" section
+    # (the section that discusses it the most — likely the one defining or explaining it)
+    link_map = {}  # {keyword_lower: (home_section_idx, keyword_original_case)}
+    for kw in unique_keywords:
+        pattern = re.compile(re.escape(kw), re.IGNORECASE)
+        counts = [len(pattern.findall(s['content'])) for s in sections]
+        max_count = max(counts)
+        if max_count == 0:
+            continue  # keyword not found in any section — skip
+        home_idx = counts.index(max_count)
+        link_map[kw.lower()] = (home_idx, kw)
 
-    # TF per document
-    tfs = [Counter(doc) for doc in docs]
-
-    # IDF across all documents
-    all_terms = set(term for doc in docs for term in doc)
-    idf = {}
-    doc_frequencies = {}
-    for term in all_terms:
-        if term in STOPWORDS:
-            continue
-        df = sum(1 for doc in docs if term in doc)
-        doc_frequencies[term] = df
-        idf[term] = math.log((N + 1) / (df + 1))
-
-    # Top 2 TF-IDF keywords per section that are ALSO mentioned in other sections (df > 1)
-    top_keywords = []
-    for i, tf in enumerate(tfs):
-        scores = {}
-        for term, count in tf.items():
-            if term in idf and doc_frequencies[term] > 1:
-                scores[term] = (count / max(len(docs[i]), 1)) * idf[term]
-        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        top_keywords.append([kw for kw, _ in ranked[:2]])
-
-    # Build cross-section link map: {keyword: target_section_index}
-    link_map = {}
-    for target_idx, keywords in enumerate(top_keywords):
-        for kw in keywords:
-            if kw not in link_map:
-                link_map[kw] = target_idx
-
-    # Apply markers to content — only first occurrence per keyword per section
+    # Apply [[LINK]] markers — only the FIRST occurrence per keyword per section
+    # Never link a keyword back to its own home section
     result = []
     for src_idx, section in enumerate(sections):
         content = section['content']
-        used = set()
-        for kw, target_idx in link_map.items():
-            if target_idx == src_idx:
-                continue  # Don't link a section to itself
-            if kw in used:
-                continue
-            # Match whole word, case-insensitive, first occurrence only
-            pattern = re.compile(r'(?<![\w])(' + re.escape(kw) + r')(?![\w])', re.IGNORECASE)
+        for kw_lower, (home_idx, kw_original) in link_map.items():
+            if home_idx == src_idx:
+                continue  # This is the home section — don't self-link
+            # Build a pattern that matches whole-word, including hyphens and slashes
+            # so "HWC" doesn't match inside "NHWC", and "climate change" matches
+            # "Climate Change" anywhere in the text
+            escaped = re.escape(kw_original)
+            pattern = re.compile(r'(?<![A-Za-z0-9\-])(' + escaped + r')(?![A-Za-z0-9\-])', re.IGNORECASE)
             match = pattern.search(content)
             if match:
-                replacement = f'[[LINK:{target_idx}:{match.group(1)}]]'
+                replacement = f'[[LINK:{home_idx}:{match.group(1)}]]'
                 content = content[:match.start()] + replacement + content[match.end():]
-                used.add(kw)
         result.append({**section, 'content': content})
     return result
 
