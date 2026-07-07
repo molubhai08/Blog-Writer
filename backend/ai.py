@@ -15,10 +15,22 @@ from cerebras.cloud.sdk import Cerebras
 
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
+GROQ_API_KEYS_RAW = os.getenv("GROQ_API_KEYS", "")
+GROQ_KEYS = [k.strip() for k in GROQ_API_KEYS_RAW.split(",") if k.strip()]
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY and GROQ_KEYS:
+    GROQ_API_KEY = GROQ_KEYS[0]
+if not GROQ_KEYS:
+    GROQ_KEYS = [GROQ_API_KEY] if GROQ_API_KEY else []
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 SAPLING_API_KEY = os.getenv("SAPLING_API_KEY")
+CEREBRAS_API_KEYS_RAW = os.getenv("CEREBRAS_API_KEYS", "")
+CEREBRAS_KEYS = [k.strip() for k in CEREBRAS_API_KEYS_RAW.split(",") if k.strip()]
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
+if not CEREBRAS_API_KEY and CEREBRAS_KEYS:
+    CEREBRAS_API_KEY = CEREBRAS_KEYS[0]
+if not CEREBRAS_KEYS:
+    CEREBRAS_KEYS = [CEREBRAS_API_KEY] if CEREBRAS_API_KEY else []
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
@@ -47,14 +59,22 @@ if CEREBRAS_API_KEY:
         cerebras_client = None
 
 
-def cerebras_invoke(prompt: str) -> str:
-    if not cerebras_client:
+def cerebras_invoke(prompt: str, api_key: str = None) -> str:
+    client = None
+    if api_key:
+        try:
+            client = Cerebras(api_key=api_key)
+        except Exception:
+            client = None
+    if not client:
+        client = cerebras_client
+    if not client:
         raise ValueError("Cerebras client not initialized due to missing API key")
-    response = cerebras_client.chat.completions.create(
+    response = client.chat.completions.create(
         model=CEREBRAS_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
-        max_tokens=4096,  # Prevent truncation on long outputs
+        max_tokens=4096,
     )
     return response.choices[0].message.content
 
@@ -72,23 +92,38 @@ def robust_json_loads(json_str: str) -> dict:
 
     match = re.search(r"\{[\s\S]*\}", cleaned)
     if not match:
-        return {}
-    obj_str = match.group()
+        start_idx = cleaned.find("{")
+        if start_idx != -1:
+            obj_str = cleaned[start_idx:]
+        else:
+            return {}
+    else:
+        obj_str = match.group()
 
-    # Strip trailing commas in objects and arrays to prevent strict JSON parsing failures
     obj_str = re.sub(r',\s*\}', '}', obj_str)
     obj_str = re.sub(r',\s*\]', ']', obj_str)
 
     try:
         return json.loads(obj_str)
     except json.JSONDecodeError:
-        # Simple bracket completion logic if the response was truncated mid-way
-        open_braces = obj_str.count('{')
-        close_braces = obj_str.count('}')
-        open_brackets = obj_str.count('[')
-        close_brackets = obj_str.count(']')
+        if '"mcqs"' in obj_str and "[" in obj_str:
+            last_comma_brace = obj_str.rfind("},")
+            if last_comma_brace != -1:
+                salvaged = obj_str[:last_comma_brace + 1] + "]}"
+                try:
+                    return json.loads(salvaged)
+                except Exception:
+                    pass
 
         repaired = obj_str
+        if repaired.count('"') % 2 != 0:
+            repaired += '"'
+
+        open_braces = repaired.count('{')
+        close_braces = repaired.count('}')
+        open_brackets = repaired.count('[')
+        close_brackets = repaired.count(']')
+
         if open_brackets > close_brackets:
             repaired += ']' * (open_brackets - close_brackets)
         if open_braces > close_braces:
@@ -100,13 +135,14 @@ def robust_json_loads(json_str: str) -> dict:
             return {}
 
 
-def invoke_agent_with_fallback(prompt: str, fallback_model: str) -> str:
-    if cerebras_client:
+def invoke_agent_with_fallback(prompt: str, fallback_model: str, api_key: str = None, cerebras_api_key: str = None) -> str:
+    c_key = cerebras_api_key if cerebras_api_key else CEREBRAS_API_KEY
+    if c_key:
         try:
-            return cerebras_invoke(prompt)
+            return cerebras_invoke(prompt, api_key=c_key)
         except Exception:
             pass
-    llm = build_llm(fallback_model)
+    llm = build_llm(fallback_model, api_key=api_key)
     response = llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
     return response.content
 
@@ -118,11 +154,12 @@ def llm_invoke_with_retry(llm, messages, retries=3, wait=5):
     for attempt in range(retries):
         try:
             return llm.invoke(messages)
-        except RateLimitError:
-            if attempt < retries - 1:
-                time.sleep(wait)
-            else:
-                raise
+        except Exception as e:
+            if "rate_limit" in str(e).lower() or "429" in str(e):
+                if attempt < retries - 1:
+                    time.sleep(wait)
+                    continue
+            raise
 
 
 # ── Topic Validator ──────────────────────────────────────────────────────────
@@ -310,8 +347,9 @@ class AgentState(TypedDict):
 
 # ── Reusable LLM builder ─────────────────────────────────────────────────────
 
-def build_llm(model: str, tools: list = []):
-    llm = ChatGroq(api_key=GROQ_API_KEY, model=model, temperature=0.3, max_tokens=4096)
+def build_llm(model: str, tools: list = [], api_key: str = None):
+    key = api_key if api_key else GROQ_API_KEY
+    llm = ChatGroq(api_key=key, model=model, temperature=0.3, max_tokens=4096)
     if tools:
         return llm.bind_tools(tools)
     return llm
@@ -421,8 +459,12 @@ Rules:
 - If audience is Professional or General, set gsPaper to null and subject to a general category
 - writingInstructions should be 3-4 clear guidelines for the content writer
 - outline must have exactly 4 sections (Introduction, 2 body sections, Conclusion)
+- For UPSC, follow these structural rules:
+  1. Inter-disciplinary connection: Connect the topic to another GS paper dimension. One body section must represent this connection (e.g. connect a GS-I/III topic to GS-IV Ethics via concepts like 'Crisis of Conscience' or moral dilemmas, or to GS-II International Relations via foreign policy corridors).
+  2. Active Recall & Gamification: Do NOT use passive, dry headings (like 'Challenges' or 'Way Forward'). Instead, formulate the body and conclusion section outline headings as challenging, role-based, analytical, or situational questions (e.g., 'If you are a District Magistrate, how would you deploy PWDVA 2005 to protect a victim today?' or 'How does Green Hydrogen corridors redefine India's bilateral tie with Japan and EU?').
 - For UPSC: avoid political bias, use educational tone, include exam relevance
-- No extra text. Just JSON."""
+- No extra text. Just JSON.
+"""
 
 
 def run_narrative_agent(topic: str, audience: str, research_data: dict) -> dict:
@@ -490,11 +532,11 @@ def run_narrative_agent(topic: str, audience: str, research_data: dict) -> dict:
 
 # ── Section Researcher Agent ─────────────────────────────────────────────────
 
-def build_section_researcher():
+def build_section_researcher(api_key: str = None):
     os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
     search_tool = TavilySearchResults(max_results=1)
     tools = [search_tool]
-    llm = build_llm(SECTION_RESEARCHER_MODEL, tools)
+    llm = build_llm(SECTION_RESEARCHER_MODEL, tools, api_key=api_key)
     return build_react_agent(llm, tools)
 
 
@@ -506,9 +548,9 @@ SECTION: {section}
 TOPIC: {topic}"""
 
 
-def run_section_researcher(topic: str, section: str) -> dict:
+def run_section_researcher(topic: str, section: str, api_key: str = None) -> dict:
     import json, re
-    agent = build_section_researcher()
+    agent = build_section_researcher(api_key=api_key)
     prompt = SECTION_RESEARCHER_PROMPT.format(topic=topic, section=section)
     state = agent.invoke({"messages": [HumanMessage(content=prompt)]})
     
@@ -540,6 +582,8 @@ TOPIC: {topic}
 AUDIENCE: {audience}
 TARGET WORDS: ~{target_words} words
 
+{section_role}
+
 RESEARCH FACTS:
 {facts}
 
@@ -565,7 +609,7 @@ Return JSON:
 No extra text."""
 
 
-def run_writer(topic: str, section: str, audience: str, section_research: dict, narrative: dict, feedback: str = "") -> dict:
+def run_writer(topic: str, section: str, audience: str, section_research: dict, narrative: dict, feedback: str = "", api_key: str = None, cerebras_api_key: str = None) -> dict:
     import json, re
     
     para_path = Path(__file__).parent / "para.md"
@@ -577,9 +621,20 @@ def run_writer(topic: str, section: str, audience: str, section_research: dict, 
     
     facts_text = "\n".join([f"- {f['fact']} ({f.get('source', '')})" for f in section_research.get("facts", [])])
     
-    num_sections = len(narrative.get("outline", []))
+    outline = narrative.get("outline", [])
+    num_sections = len(outline)
     target_words = BLOG_TARGET_LENGTH // num_sections if num_sections > 0 else 200
     
+    section_role = ""
+    if outline:
+        def clean(s):
+            return re.sub(r"[^a-zA-Z0-9]", "", s).lower()
+        cleaned_sec = clean(section)
+        if cleaned_sec == clean(outline[0]):
+            section_role = "SECTION ROLE: This is the INTRODUCTION section. Start with an engaging, attention-grabbing hook (such as a shocking fact, rhetorical question, or real-life anecdote) to immediately pull the reader in."
+        elif cleaned_sec == clean(outline[-1]):
+            section_role = "SECTION ROLE: This is the CONCLUSION section. End with a clear takeaway or call-to-action / question to prompt the reader to think or reply."
+            
     feedback_text = f"\nREVIEWER FEEDBACK:\n{feedback}\n\nRewrite addressing the above issues." if feedback else ""
     
     prompt = WRITER_PROMPT.format(
@@ -587,13 +642,14 @@ def run_writer(topic: str, section: str, audience: str, section_research: dict, 
         topic=topic,
         audience=audience,
         target_words=target_words,
+        section_role=section_role,
         facts=facts_text,
         gs_info=gs_info,
         writing_guidelines=writing_guidelines,
         feedback=feedback_text
     )
 
-    raw = invoke_agent_with_fallback(prompt, WRITER_MODEL)
+    raw = invoke_agent_with_fallback(prompt, WRITER_MODEL, api_key=api_key, cerebras_api_key=cerebras_api_key)
 
     try:
         match = re.search(r"\{[\s\S]*\}", raw)
@@ -653,8 +709,8 @@ def run_reviewer(content: str) -> dict:
 
 # ── Section Pipeline with Review Loop ────────────────────────────────────────
 
-def run_section_pipeline(topic: str, section: str, audience: str, narrative: dict) -> dict:
-    section_research = run_section_researcher(topic, section)
+def run_section_pipeline(topic: str, section: str, audience: str, narrative: dict, api_key: str = None, cerebras_api_key: str = None) -> dict:
+    section_research = run_section_researcher(topic, section, api_key=api_key)
     
     written_section = None
     review = None
@@ -662,7 +718,7 @@ def run_section_pipeline(topic: str, section: str, audience: str, narrative: dic
     for attempt in range(MAX_RETRIES + 1):
         feedback = review["feedback"] if review and review["humanScore"] < 0.7 else ""
         
-        written_section = run_writer(topic, section, audience, section_research, narrative, feedback)
+        written_section = run_writer(topic, section, audience, section_research, narrative, feedback, api_key=api_key, cerebras_api_key=cerebras_api_key)
         review = run_reviewer(written_section["content"])
         
         if review["humanScore"] >= 0.7:
@@ -757,8 +813,8 @@ Return ONLY valid JSON:
 }}
 
 Rules:
-- title: descriptive, includes primary keyword, 50-60 chars
-- metaTitle: same as title or slight variation, under 60 chars
+- title: A strong, engaging, benefit-driven or curiosity-sparking headline (e.g. "How India is Secretly Winning the Renewable Energy Race" or "10 Ways to Save Time Every Morning" rather than dry academic titles), includes primary keyword, 50-70 chars
+- metaTitle: same as title or slight variation, under 70 chars
 - metaDescription: 150-160 chars, includes primary keyword, describes the article
 - slug: lowercase, hyphen-separated, no special chars
 - tags: 5-8 relevant tags
@@ -866,10 +922,17 @@ def run_mcq_generator(topic: str, audience: str, sections: list) -> dict:
     print(f"[MCQ] Raw model response (first 300 chars):\n{raw_response[:300]}")
 
     parsed = robust_json_loads(raw_response)
-    print(f"[MCQ] Parsed result. Questions count: {len(parsed.get('mcqs', []))}")
+    questions = parsed.get("mcqs", [])
+    valid_questions = []
+    for q in questions:
+        if isinstance(q, dict) and "options" in q:
+            opts = q["options"]
+            if isinstance(opts, dict) and all(k in opts for k in ["A", "B", "C", "D"]):
+                valid_questions.append(q)
+    print(f"[MCQ] Parsed result. Questions count: {len(valid_questions)}")
 
     return {
-        "mcqs": parsed.get("mcqs", [])
+        "mcqs": valid_questions
     }
 
 
@@ -921,6 +984,48 @@ def run_upsc_callout(topic: str, gs_paper: str, subject: str, sections: list) ->
         "keywordsToWrite": parsed.get("keywordsToWrite", []),
         "approach": parsed.get("approach", "")
     }
+
+
+def run_topic_ideator(audience: str, existing_topics: list) -> list:
+    import json
+    existing_str = "\n".join(f"- {t}" for t in existing_topics) if existing_topics else "None yet."
+    audience_hint = {
+        "UPSC": "GS I–IV syllabus (polity, economy, environment, society, international relations, science & technology). Suitable for UPSC essay or answer writing.",
+        "Professional": "Business, technology, productivity, leadership, industry trends.",
+        "General": "Broad interest topics: health, culture, science, society, travel."
+    }.get(audience, "general interest")
+    prompt = f"""You are a Topic Ideator for an AI blog machine. Suggest exactly 5 fresh, specific, trending blog topics for the "{audience}" audience.
+
+Audience focus: {audience_hint}
+
+Already published topics (DO NOT suggest anything similar to these):
+{existing_str}
+
+Rules:
+- Be specific, not generic (e.g. "Impact of AI on India's IT Sector" not just "Artificial Intelligence")
+- Each topic must be clearly different from all existing ones
+- Topics must be timely and relevant for 2025-2026
+- Return ONLY valid JSON, no extra text
+
+Return:
+{{
+  "topics": [
+    "Topic 1",
+    "Topic 2",
+    "Topic 3",
+    "Topic 4",
+    "Topic 5"
+  ]
+}}"""
+
+    raw = invoke_agent_with_fallback(prompt, MCQ_MODEL)
+    try:
+        import re
+        match = re.search(r"\{[\s\S]*\}", raw)
+        parsed = json.loads(match.group()) if match else {}
+        return parsed.get("topics", [])
+    except Exception:
+        return []
 
 
 # ── Intra-Link Engine (Hybrid: LLM keywords + section frequency) ─────────────

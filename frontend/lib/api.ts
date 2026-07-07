@@ -14,6 +14,10 @@ export function generateBlog(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ topic, audience }),
   }).then(async (res) => {
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "Unknown error")
+      return onError(`HTTP ${res.status}: ${errText || res.statusText}`)
+    }
     const reader = res.body?.getReader()
     const decoder = new TextDecoder()
     if (!reader) return onError("No response stream")
@@ -43,7 +47,10 @@ export function generateBlog(
         else if (event === "conflict") onConflict(data.conflictSlug, data.conflictTitle)
       }
     }
-  }).catch((e) => onError(e.message))
+  }).catch((e) => {
+    console.error("Generate API failed:", e)
+    onError(`Network Connection Error: Failed to reach the backend server at ${API}. Details: ${e.message}`)
+  })
 }
 
 export async function regenerateSection(
@@ -81,4 +88,10 @@ export async function publishBlog(topic: string, audience: string, blog: unknown
     body: JSON.stringify({ topic, audience, blog }),
   })
   return res.json()
+}
+
+export async function suggestTopics(audience: string): Promise<string[]> {
+  const res = await fetch(`${API}/suggest-topics?audience=${encodeURIComponent(audience)}`)
+  const data = await res.json()
+  return Array.isArray(data.topics) ? data.topics : []
 }

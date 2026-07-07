@@ -19,6 +19,9 @@ from ai import (
     get_supabase_topics,
     topic_similarity,
     supabase_request,
+    run_topic_ideator,
+    GROQ_KEYS,
+    CEREBRAS_KEYS,
 )
 
 app = FastAPI()
@@ -45,6 +48,15 @@ class RegenerateRequest(BaseModel):
 
 def sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@app.get("/suggest-topics")
+async def suggest_topics(audience: str = "UPSC"):
+    loop = asyncio.get_event_loop()
+    existing = await loop.run_in_executor(None, get_supabase_topics)
+    existing_list = [b.get("topic", "") for b in existing] if isinstance(existing, list) else []
+    topics = await loop.run_in_executor(None, run_topic_ideator, audience, existing_list)
+    return {"topics": topics}
 
 
 async def stream_blog(topic: str, audience: str):
@@ -88,7 +100,9 @@ async def stream_blog(topic: str, audience: str):
 
     async def run_section_staggered(i: int, section_title: str) -> tuple:
         await asyncio.sleep(i * 4)
-        result = await loop.run_in_executor(None, run_section_pipeline, topic, section_title, audience, narrative)
+        api_key = GROQ_KEYS[i % len(GROQ_KEYS)] if GROQ_KEYS else None
+        cerebras_key = CEREBRAS_KEYS[i % len(CEREBRAS_KEYS)] if CEREBRAS_KEYS else None
+        result = await loop.run_in_executor(None, run_section_pipeline, topic, section_title, audience, narrative, api_key, cerebras_key)
         return i, section_title, result
 
     tasks = [asyncio.create_task(run_section_staggered(i, s)) for i, s in enumerate(narrative["outline"])]

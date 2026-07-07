@@ -1,13 +1,13 @@
 "use client"
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { generateBlog, fetchBlogs, deleteBlog, publishBlog } from "@/lib/api"
+import { generateBlog, fetchBlogs, deleteBlog, publishBlog, suggestTopics } from "@/lib/api"
 import { Blog, Section, StatusEvent, Audience } from "@/types/blog"
 import WorkflowProgress from "@/components/WorkflowProgress"
 import BlogView from "@/components/BlogView"
 import AgentConsole from "@/components/AgentConsole"
 import Link from "next/link"
-import { Sparkles, BookOpen, Clock, AlertTriangle, Trash2, BookOpenCheck, ChevronDown, ChevronUp } from "lucide-react"
+import { Sparkles, BookOpen, Clock, AlertTriangle, Trash2, BookOpenCheck, ChevronDown, ChevronUp, Lightbulb } from "lucide-react"
 
 function getAgentName(step: string): string {
   if (step === "validator") return "Topic Validator"
@@ -48,6 +48,8 @@ export default function Home() {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [deletingSlug, setDeletingSlug] = useState<string | null>(null)
   const [logs, setLogs] = useState<string[]>([])
+  const [suggestions, setSuggestions] = useState<string[]>([])
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false)
 
   // Load blog history on mount
   useEffect(() => {
@@ -231,8 +233,24 @@ export default function Home() {
             </div>
 
             <div className="bg-gray-950 border border-gray-800 rounded-2xl p-6 space-y-4">
-              <div>
-                <label className="text-sm text-gray-400 mb-2 block">Topic</label>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm text-gray-400">Topic</label>
+                  <button
+                    onClick={async () => {
+                      setLoadingSuggestions(true)
+                      setSuggestions([])
+                      const results = await suggestTopics(audience)
+                      setSuggestions(results)
+                      setLoadingSuggestions(false)
+                    }}
+                    disabled={loadingSuggestions}
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-orange-500/30 text-orange-400 hover:bg-orange-500/10 hover:border-orange-500/60 disabled:opacity-50 transition-all"
+                  >
+                    <Lightbulb className={`w-3.5 h-3.5 ${loadingSuggestions ? "animate-pulse" : ""}`} />
+                    {loadingSuggestions ? "Thinking..." : "Suggest Topics"}
+                  </button>
+                </div>
                 <input
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
@@ -240,6 +258,19 @@ export default function Home() {
                   placeholder="e.g. Climate Change impact on India"
                   className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-600 focus:outline-none focus:border-orange-500 transition-colors"
                 />
+                {suggestions.length > 0 && (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {suggestions.map((s, i) => (
+                      <button
+                        key={i}
+                        onClick={() => { setTopic(s); setSuggestions([]) }}
+                        className="text-xs px-3 py-1.5 rounded-full bg-gray-900 border border-gray-700 text-gray-300 hover:border-orange-500 hover:text-orange-400 transition-all text-left"
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div>
